@@ -1,27 +1,43 @@
-version: "3.9"
-
 services:
   perception:
     build: ./perception
+    network_mode: host
     env_file:
       - .env
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+    devices:
+      - /dev/video0:/dev/video0
+    cpuset: "0,1"
 
   retargeting:
     build: ./retargeting
+    network_mode: host
     env_file:
       - .env
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+    cpuset: "4,5"
+    depends_on:
+      - perception
 
   classifier:
-    build: ./retargeting
+    build: ./classifier
+    network_mode: host
     env_file:
       - .env
-
-  ros2_control:
-    build: ./ros2_control
-    env_file:
-      - .env
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+    cpuset: "6,7"
+    volumes:
+      - ./classifier/models:/app/models
+    depends_on:
+      - perception
 
   dashboard:
     build: ./dashboard
+    network_mode: host
     env_file:
       - .env
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
