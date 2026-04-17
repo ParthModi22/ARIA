@@ -1,0 +1,7 @@
+joint_limits:
+  head_pan:
+    min: -1.5
+    max: 1.5
+  head_tilt:
+    min: -1.0
+    max: 1.0

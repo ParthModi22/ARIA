@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  perception:
+    build: ./perception
+    env_file:
+      - .env
+
+  retargeting:
+    build: ./retargeting
+    env_file:
+      - .env
+
+  classifier:
+    build: ./retargeting
+    env_file:
+      - .env
+
+  ros2_control:
+    build: ./ros2_control
+    env_file:
+      - .env
+
+  dashboard:
+    build: ./dashboard
+    env_file:
+      - .env
