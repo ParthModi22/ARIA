@@ -32,11 +32,37 @@ CONTROLLER_JOINTS = [
 ]
 
 
+# OP3 standing pose — matches xacro initial_value so the robot never
+# jumps when the controller first takes over from Gazebo physics.
+STANDING_POSE: dict[str, float] = {
+    "l_sho_pitch":  0.0,
+    "r_sho_pitch":  0.0,
+    "l_sho_roll":  -0.3,
+    "r_sho_roll":   0.3,
+    "l_el":         0.0,
+    "r_el":         0.0,
+    "l_hip_yaw":    0.0,
+    "r_hip_yaw":    0.0,
+    "l_hip_roll":   0.0,
+    "r_hip_roll":   0.0,
+    "l_hip_pitch": -0.57,
+    "r_hip_pitch":  0.57,
+    "l_knee":       1.2,
+    "r_knee":       1.2,
+    "l_ank_pitch":  0.62,
+    "r_ank_pitch": -0.62,
+    "l_ank_roll":   0.0,
+    "r_ank_roll":   0.0,
+    "head_pan":     0.0,
+    "head_tilt":    0.0,
+}
+
+
 class ActionDispatcher(Node):
     def __init__(self) -> None:
         super().__init__("action_dispatcher")
 
-        self._positions: dict[str, float] = {name: 0.0 for name in CONTROLLER_JOINTS}
+        self._positions: dict[str, float] = dict(STANDING_POSE)
 
         self._publisher = self.create_publisher(
             Float64MultiArray,
