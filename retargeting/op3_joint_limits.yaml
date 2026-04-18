@@ -11,25 +11,25 @@ joint_limits:
     max: 1.0
     invert: true
     offset: -0.8
-  l_shoulder_pitch:
+  l_sho_pitch:
     mediapipe_landmarks: [23, 11, 13]
     min: -2.0
     max: 2.0
     invert: false
     offset: -0.6
-  l_elbow:
+  l_el:
     mediapipe_landmarks: [11, 13, 15]
     min: 0.0
     max: 2.4
     invert: false
     offset: 0.0
-  r_shoulder_pitch:
+  r_sho_pitch:
     mediapipe_landmarks: [24, 12, 14]
     min: -2.0
     max: 2.0
     invert: true
     offset: 0.6
-  r_elbow:
+  r_el:
     mediapipe_landmarks: [12, 14, 16]
     min: 0.0
     max: 2.4

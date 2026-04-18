@@ -4,7 +4,7 @@ from pathlib import Path
 import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -110,6 +110,11 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
+    action_dispatcher = ExecuteProcess(
+        cmd=["python3", str(Path(__file__).with_name("action_dispatcher.py"))],
+        output="screen",
+    )
+
     foxglove_bridge = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -129,9 +134,10 @@ def generate_launch_description() -> LaunchDescription:
             gazebo,
             robot_state_publisher,
             spawn_op3,
-            TimerAction(period=2.0, actions=[joint_state_broadcaster]),
-            TimerAction(period=4.0, actions=[forward_position_controller]),
-            TimerAction(period=6.0, actions=[joint_trajectory_controller]),
+            TimerAction(period=1.0, actions=[joint_state_broadcaster]),
+            TimerAction(period=2.0, actions=[forward_position_controller]),
+            TimerAction(period=3.0, actions=[joint_trajectory_controller]),
+            action_dispatcher,
             foxglove_bridge,
             web_video_server,
         ]
