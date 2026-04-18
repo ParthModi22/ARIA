@@ -251,9 +251,11 @@ class RetargetingNode(Node):
             return
 
         raw = np.asarray(msg.data, dtype=np.float64).reshape(33, 4)
-        # Replace low-visibility landmarks with NaN so _ok() guards reject them
-        # and joints fall back to STANDING_DEFAULTS rather than using noisy data.
-        _VIS_THRESHOLD = 0.4
+        # Replace near-zero-visibility landmarks with NaN so _ok() guards reject them.
+        # Threshold 0.15: only reject landmarks that are almost certainly not visible;
+        # raised arms can legitimately have visibility ~0.25-0.4 so a high threshold
+        # would freeze the arms at standing defaults.
+        _VIS_THRESHOLD = 0.15
         lm = [
             raw[i, :3] if raw[i, 3] >= _VIS_THRESHOLD else np.full(3, float("nan"))
             for i in range(33)
@@ -272,8 +274,18 @@ class RetargetingNode(Node):
         out.position = [float(command[name]) for name in CONTROLLER_JOINTS]
         self._publisher.publish(out)
 
-        if t - self._last_log >= 5.0:
-            self.get_logger().info("Retargeting running")
+        if t - self._last_log >= 2.0:
+            lp = smoothed.get("l_sho_pitch", 0.0)
+            rp = smoothed.get("r_sho_pitch", 0.0)
+            lr = smoothed.get("l_sho_roll", 0.0)
+            rr = smoothed.get("r_sho_roll", 0.0)
+            le = smoothed.get("l_el", 0.0)
+            re = smoothed.get("r_el", 0.0)
+            self.get_logger().info(
+                f"Arms  l_pitch={lp:+.2f} r_pitch={rp:+.2f} "
+                f"l_roll={lr:+.2f} r_roll={rr:+.2f} "
+                f"l_el={le:.2f} r_el={re:.2f}"
+            )
             self._last_log = t
 
 

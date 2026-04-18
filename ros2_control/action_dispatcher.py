@@ -32,8 +32,12 @@ CONTROLLER_JOINTS = [
 ]
 
 
-# OP3 standing pose — matches xacro initial_value so the robot never
-# jumps when the controller first takes over from Gazebo physics.
+# OP3 standing pose — must match the initial_value in op3_ros2_control.xacro
+# exactly so the robot doesn't jerk when the controller takes over.
+import math as _math
+_Q6 = _math.pi / 6   # 0.5236 rad  (30°)
+_Q3 = _math.pi / 3   # 1.0472 rad  (60°)
+
 STANDING_POSE: dict[str, float] = {
     "l_sho_pitch":  0.0,
     "r_sho_pitch":  0.0,
@@ -45,12 +49,12 @@ STANDING_POSE: dict[str, float] = {
     "r_hip_yaw":    0.0,
     "l_hip_roll":   0.0,
     "r_hip_roll":   0.0,
-    "l_hip_pitch": -0.57,
-    "r_hip_pitch":  0.57,
-    "l_knee":       1.2,
-    "r_knee":       1.2,
-    "l_ank_pitch":  0.62,
-    "r_ank_pitch": -0.62,
+    "l_hip_pitch": -_Q6,   # -0.5236  matches xacro initial_value
+    "r_hip_pitch":  _Q6,   # +0.5236
+    "l_knee":       _Q3,   # +1.0472  matches xacro initial_value
+    "r_knee":       _Q3,
+    "l_ank_pitch":  _Q6,   # +0.5236  matches xacro initial_value
+    "r_ank_pitch": -_Q6,   # -0.5236
     "l_ank_roll":   0.0,
     "r_ank_roll":   0.0,
     "head_pan":     0.0,

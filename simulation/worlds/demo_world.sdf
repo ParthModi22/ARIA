@@ -2,10 +2,52 @@
 <sdf version="1.7">
   <world name="demo_world">
 
-    <include>
-      <uri>model://sun</uri>
-    </include>
+    <!-- Explicit physics so gravity, step size, and solver are well-defined -->
+    <physics type="ode">
+      <gravity>0 0 -9.8</gravity>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>50</iters>
+          <sor>1.3</sor>
+        </solver>
+        <constraints>
+          <cfm>0.0</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>100</contact_max_correcting_vel>
+          <contact_surface_layer>0.001</contact_surface_layer>
+        </constraints>
+      </ode>
+      <real_time_update_rate>1000</real_time_update_rate>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+    </physics>
 
+    <!-- Inline sun light — avoids model://sun which fails when
+         GAZEBO_MODEL_DATABASE_URI is empty -->
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+    </light>
+
+    <!-- Ambient fill light so the robot is clearly visible from all sides -->
+    <light name="ambient_fill" type="directional">
+      <cast_shadows>false</cast_shadows>
+      <diffuse>0.4 0.4 0.5 1</diffuse>
+      <specular>0.0 0.0 0.0 1</specular>
+      <direction>0.5 -0.1 -0.5</direction>
+    </light>
+
+    <!-- Ground plane with friction so feet don't slide -->
     <model name="ground_plane">
       <static>true</static>
       <link name="link">
@@ -13,20 +55,37 @@
           <geometry>
             <plane>
               <normal>0 0 1</normal>
-              <size>20 20</size>
+              <size>30 30</size>
             </plane>
           </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+            <contact>
+              <ode>
+                <kp>1e6</kp>
+                <kd>100</kd>
+                <max_vel>1</max_vel>
+                <min_depth>0.001</min_depth>
+              </ode>
+            </contact>
+          </surface>
         </collision>
         <visual name="visual">
           <geometry>
             <plane>
               <normal>0 0 1</normal>
-              <size>20 20</size>
+              <size>30 30</size>
             </plane>
           </geometry>
           <material>
-            <ambient>0.3 0.3 0.3 1</ambient>
-            <diffuse>0.5 0.5 0.5 1</diffuse>
+            <ambient>0.4 0.4 0.4 1</ambient>
+            <diffuse>0.6 0.6 0.6 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
           </material>
         </visual>
       </link>
