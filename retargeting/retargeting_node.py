@@ -44,12 +44,15 @@ VIS_UPPER  = 0.20   # torso, shoulder, elbow, wrist
 VIS_LOWER  = 0.20   # hip, knee
 VIS_FOOT   = 0.60   # ankle, foot (often occluded; bad data causes ankle flailing)
 
+# Official OP3 arm joint bound from URDF: lower/upper = ±pi*0.9.
+OP3_ARM_URDF_LIMIT = 0.9 * math.pi
+
 # ── Joint limits [rad] ─────────────────────────────────────────────────────────
 LIMITS: dict[str, tuple[float, float]] = {
     "head_pan":    (-1.5,  1.5),
     "head_tilt":   (-1.0,  1.0),
-    "l_sho_pitch": (-2.0,  2.0),
-    "r_sho_pitch": (-2.0,  2.0),
+    "l_sho_pitch": (-OP3_ARM_URDF_LIMIT,  OP3_ARM_URDF_LIMIT),
+    "r_sho_pitch": (-OP3_ARM_URDF_LIMIT,  OP3_ARM_URDF_LIMIT),
     "l_sho_roll":  (-1.6,  1.6),
     "r_sho_roll":  (-1.6,  1.6),
     "l_el":        ( 0.0,  2.4),
@@ -127,9 +130,8 @@ ENABLE_2D_UPPER_BODY_MIME = True
 
 MIME_ARM_DOWN_DY = 0.06
 MIME_ARM_DOWN_RATIO = 0.55
-MIME_SHOULDER_PITCH_GAIN = 2.6
-MIME_SHOULDER_PITCH_DEADBAND = 0.05
-MIME_SHOULDER_PITCH_LIMIT = 1.0
+MIME_SHOULDER_PITCH_DEADBAND_RAD = 0.08
+MIME_SHOULDER_PITCH_LIMIT = min(OP3_ARM_URDF_LIMIT, LIMITS["l_sho_pitch"][1])
 LEFT_SHOULDER_PITCH_SIGN = 1.0
 RIGHT_SHOULDER_PITCH_SIGN = -1.0
 LEFT_ELBOW_SIGN = 1.0
@@ -223,22 +225,28 @@ def _arm_pitch_from_image_depth(shoulder: np.ndarray, elbow: np.ndarray, wrist: 
     """
     Front/back shoulder pitch from MediaPipe image landmark depth.
 
-    In MediaPipe pose landmarks, smaller z means closer to the camera.  A hand
-    coming toward the camera therefore gives positive shoulder_z - wrist_z.
+    In MediaPipe pose landmarks, smaller z means closer to the camera. Use the
+    shoulder->wrist 3D direction to get a geometric front/back pitch that is
+    less sensitive to per-landmark z noise.
     """
     # When the hand is clearly above the shoulder, the visible gesture is an
     # up/side gesture; depth noise should not pull the arm forward/back.
     if float(wrist[1] - shoulder[1]) < -MIME_ARM_DOWN_DY:
         return 0.0
 
-    depth = float(shoulder[2] - 0.5 * (elbow[2] + wrist[2]))
-    if abs(depth) < MIME_SHOULDER_PITCH_DEADBAND:
+    seg = wrist - shoulder
+    seg_norm = float(np.linalg.norm(seg))
+    if seg_norm <= 1e-9:
         return 0.0
-    return float(np.clip(
-        MIME_SHOULDER_PITCH_GAIN * depth,
-        -MIME_SHOULDER_PITCH_LIMIT,
-        MIME_SHOULDER_PITCH_LIMIT,
-    ))
+
+    seg_unit = seg / seg_norm
+    seg_fwd = float(np.clip(-seg_unit[2], -1.0, 1.0))
+    seg_non_fwd = math.sqrt(max(0.0, 1.0 - seg_fwd * seg_fwd))
+    pitch = float(math.atan2(seg_fwd, max(seg_non_fwd, 1e-9)))
+
+    if abs(pitch) < MIME_SHOULDER_PITCH_DEADBAND_RAD:
+        return 0.0
+    return float(np.clip(pitch, -MIME_SHOULDER_PITCH_LIMIT, MIME_SHOULDER_PITCH_LIMIT))
 
 
 def _arm_roll_from_image(
@@ -316,7 +324,7 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
             joints["l_sho_roll"] = clamp("l_sho_roll", roll)
             pitch = _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
             joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch)
-            elbow_angle = _angle_at(lm[L_SHOULDER][:2], lm[L_ELBOW][:2], lm[L_WRIST][:2])
+            elbow_angle = _angle_at(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
             joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - elbow_angle))
 
     if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
@@ -334,7 +342,7 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
             joints["r_sho_roll"] = clamp("r_sho_roll", roll)
             pitch = _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
             joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch)
-            elbow_angle = _angle_at(lm[R_SHOULDER][:2], lm[R_ELBOW][:2], lm[R_WRIST][:2])
+            elbow_angle = _angle_at(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
             joints["r_el"] = clamp("r_el", RIGHT_ELBOW_SIGN * (math.pi - elbow_angle))
 
     return joints
