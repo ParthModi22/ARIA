@@ -131,7 +131,7 @@ def compute_joints(lm: list[np.ndarray]) -> dict[str, float]:
     Body frame (person-relative):
       up    = hip-midpoint → shoulder-midpoint
       right = left-shoulder → right-shoulder  (person's right)
-      fwd   = cross(right, up)                (toward camera)
+      fwd   = cross(up, right)                 (toward camera, = −z in MediaPipe world)
 
     Shoulder pitch  = arm in the sagittal plane  (fwd / up)
     Shoulder roll   = arm in the frontal  plane  (right / up)
@@ -165,8 +165,10 @@ def compute_joints(lm: list[np.ndarray]) -> dict[str, float]:
     # ── Left arm ──────────────────────────────────────────────────────────────
     if _ok(lm, L_SHOULDER, L_ELBOW):
         la = lm[L_ELBOW] - lm[L_SHOULDER]
-        joints["l_sho_pitch"] = clamp("l_sho_pitch",  math.atan2( np.dot(la, fwd),   -np.dot(la, up)))
-        joints["l_sho_roll"]  = clamp("l_sho_roll",   math.atan2(-np.dot(la, right), -np.dot(la, up)))
+        joints["l_sho_pitch"] = clamp("l_sho_pitch",  math.atan2( np.dot(la, fwd),  -np.dot(la, up)))
+        # roll: arm to the LEFT is outward → l_sho_roll initial is -0.3 (negative = away)
+        # so arm going left (la ≈ -right) must give a negative angle → use +dot(la, right)
+        joints["l_sho_roll"]  = clamp("l_sho_roll",   math.atan2( np.dot(la, right), -np.dot(la, up)))
 
     if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
         joints["l_el"] = clamp("l_el", math.pi - _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST]))
@@ -183,7 +185,9 @@ def compute_joints(lm: list[np.ndarray]) -> dict[str, float]:
     # ── Left leg ──────────────────────────────────────────────────────────────
     if _ok(lm, L_HIP, L_KNEE):
         lt = lm[L_KNEE] - lm[L_HIP]
-        joints["l_hip_pitch"] = clamp("l_hip_pitch",  math.atan2( np.dot(lt, fwd),   -np.dot(lt, up)))
+        # pitch: l_hip_pitch initial = -0.5236 (negative) for forward-leaning thigh
+        # so thigh slightly forward (lt has +fwd component) must give NEGATIVE pitch → negate fwd
+        joints["l_hip_pitch"] = clamp("l_hip_pitch",  math.atan2(-np.dot(lt, fwd),   -np.dot(lt, up)))
         joints["l_hip_roll"]  = clamp("l_hip_roll",   math.atan2(-np.dot(lt, right), -np.dot(lt, up)))
 
     if _ok(lm, L_HIP, L_KNEE, L_ANKLE):
@@ -204,7 +208,9 @@ def compute_joints(lm: list[np.ndarray]) -> dict[str, float]:
         joints["r_knee"] = clamp("r_knee", math.pi - _bend(lm[R_HIP], lm[R_KNEE], lm[R_ANKLE]))
 
     if _ok(lm, R_KNEE, R_ANKLE, R_FOOT):
-        joints["r_ank_pitch"] = clamp("r_ank_pitch", _bend(lm[R_KNEE], lm[R_ANKLE], lm[R_FOOT]) - math.pi / 2.0)
+        # r_ank_pitch initial = -0.5236 (negative), opposite sign to l_ank_pitch
+        # same bend geometry but mirrored axis → negate the formula
+        joints["r_ank_pitch"] = clamp("r_ank_pitch", math.pi / 2.0 - _bend(lm[R_KNEE], lm[R_ANKLE], lm[R_FOOT]))
 
     return joints
 
@@ -231,8 +237,10 @@ class RetargetingNode(Node):
         )
 
         # One-Euro filters on output angles — smooths jitter without adding lag
+        # min_cutoff=0.5 Hz: baseline smoothing for slow/stopped joints
+        # beta=0.1: speed-dependent cutoff — tracks fast arm movements without lag
         self._filters: dict[str, OneEuroFilter] = {
-            name: OneEuroFilter(min_cutoff=0.5, beta=0.05)
+            name: OneEuroFilter(min_cutoff=0.5, beta=0.1)
             for name in JOINT_NAMES
         }
         self._last_log = time.monotonic()
@@ -243,7 +251,13 @@ class RetargetingNode(Node):
             return
 
         raw = np.asarray(msg.data, dtype=np.float64).reshape(33, 4)
-        lm = [raw[i, :3] for i in range(33)]
+        # Replace low-visibility landmarks with NaN so _ok() guards reject them
+        # and joints fall back to STANDING_DEFAULTS rather than using noisy data.
+        _VIS_THRESHOLD = 0.4
+        lm = [
+            raw[i, :3] if raw[i, 3] >= _VIS_THRESHOLD else np.full(3, float("nan"))
+            for i in range(33)
+        ]
 
         joints = compute_joints(lm)
 
