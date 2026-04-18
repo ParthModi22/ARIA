@@ -81,6 +81,8 @@ class MediaPipeNode(Node):
         self.pose_publisher.publish(landmark_msg)
 
         annotated_frame = self._annotate_frame(frame, results)
+        cv2.imshow("MediaPipe Pose", annotated_frame)
+        cv2.waitKey(1)
         image_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
         image_msg.header.stamp = self.get_clock().now().to_msg()
         image_msg.header.frame_id = "camera"
