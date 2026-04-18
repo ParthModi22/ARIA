@@ -16,18 +16,25 @@ from std_msgs.msg import Float32MultiArray
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "perception"))
 from one_euro_filter import OneEuroFilter
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coordinate_transform import (
+    norm as _n,
+    canonical_up as _canonical_up,
+    compute_body_frame,
+    NOSE,
+    L_SHOULDER, R_SHOULDER,
+    L_ELBOW,    R_ELBOW,
+    L_WRIST,    R_WRIST,
+    L_HIP,      R_HIP,
+    L_KNEE,     R_KNEE,
+    L_ANKLE,    R_ANKLE,
+    L_FOOT,     R_FOOT,
+)
+
 
 EXPECTED = 33 * 4
 
-# ── MediaPipe landmark indices ─────────────────────────────────────────────────
-NOSE = 0
-L_SHOULDER, R_SHOULDER = 11, 12
-L_ELBOW,    R_ELBOW    = 13, 14
-L_WRIST,    R_WRIST    = 15, 16
-L_HIP,      R_HIP      = 23, 24
-L_KNEE,     R_KNEE     = 25, 26
-L_ANKLE,    R_ANKLE    = 27, 28
-L_FOOT,     R_FOOT     = 31, 32
+# Landmark indices imported from coordinate_transform (single source of truth).
 
 # ── Visibility thresholds ──────────────────────────────────────────────────────
 # Raised/moving arms can have vis ~0.2, so keep upper-body threshold low.
@@ -100,11 +107,6 @@ DEBUG_UPPER_BODY_ONLY = False
 
 # ── Math helpers ───────────────────────────────────────────────────────────────
 
-def _n(v: np.ndarray) -> np.ndarray:
-    m = np.linalg.norm(v)
-    return v / m if m > 1e-9 else np.zeros(3)
-
-
 def _bend(a: np.ndarray, vertex: np.ndarray, c: np.ndarray) -> float:
     """Interior angle at `vertex` in radians, in [0, π]."""
     v1, v2 = a - vertex, c - vertex
@@ -130,11 +132,6 @@ def _stable_pitch(segment: np.ndarray, fwd: np.ndarray) -> float:
     seg_fwd = float(np.dot(unit, fwd))
     seg_non_fwd = math.sqrt(max(0.0, 1.0 - seg_fwd * seg_fwd))
     return float(math.atan2(seg_fwd, max(seg_non_fwd, 1e-9)))
-
-
-def _canonical_up() -> np.ndarray:
-    """Fallback 'up' direction — MediaPipe world y-axis points UP (+1.0)."""
-    return np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
 
 def _camera_roll(segment: np.ndarray, right: np.ndarray, up: np.ndarray) -> float:
@@ -227,24 +224,10 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
 
         return joints
 
-    if _ok(lm, L_HIP, R_HIP):
-        hip_mid = (lm[L_HIP] + lm[R_HIP]) / 2.0
-        up = _n(sho_mid - hip_mid)
-    elif _ok(lm, NOSE):
-        up = _n(lm[NOSE] - sho_mid)
-    else:
-        up = _canonical_up()
-
-    if np.linalg.norm(up) <= 1e-9:
-        up = _canonical_up()
-
-    fwd = _n(np.cross(up, right))   # −z in MediaPipe world = toward camera
-    if np.linalg.norm(fwd) <= 1e-9:
-        up = _canonical_up()
-        fwd = _n(np.cross(up, right))
-
-    if np.linalg.norm(fwd) <= 1e-9:
+    body_frame = compute_body_frame(lm)
+    if body_frame is None:
         return joints
+    right, up, fwd = body_frame   # right re-bound from compute_body_frame (same value)
 
     # ── Head ─────────────────────────────────────────────────────────────────
     if _ok(lm, NOSE):

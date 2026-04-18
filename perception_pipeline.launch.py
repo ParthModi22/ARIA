@@ -1,4 +1,9 @@
-"""Launch the full perception pipeline: mediapipe → classifier → retargeting."""
+"""Launch the perception pipeline: mediapipe → retargeting.
+
+The classifier is currently disabled so movement development can proceed without
+the classifier process interfering.  Re-enable pose_classifier below once
+gesture classification is needed.
+"""
 
 from pathlib import Path
 
@@ -26,6 +31,6 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription([
         mediapipe_node,
-        pose_classifier,
+        # pose_classifier,  # disabled — enable when classifier is needed
         retargeting_node,
     ])

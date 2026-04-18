@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import time
 from typing import List
 
 import sys
@@ -18,9 +17,6 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float32MultiArray
-
-from one_euro_filter import OneEuroFilter
-
 
 LANDMARK_COUNT = 33
 VALUES_PER_LANDMARK = 4
@@ -64,13 +60,8 @@ class MediaPipeNode(Node):
             min_tracking_confidence=0.5,
         )
 
-        self.coordinate_filters: List[List[OneEuroFilter]] = [
-            [OneEuroFilter(min_cutoff=1.0, beta=0.01) for _ in range(3)]
-            for _ in range(LANDMARK_COUNT)
-        ]
-
         self.timer = self.create_timer(1.0 / 30.0, self.process_frame)
-        self.get_logger().info("mediapipe_node started")
+        self.get_logger().info("mediapipe_node started — raw world landmarks (retargeting handles smoothing)")
 
     def process_frame(self) -> None:
         success, frame = self.capture.read()
@@ -109,25 +100,21 @@ class MediaPipeNode(Node):
         if not results.pose_world_landmarks:
             return data
 
-        timestamp = time.monotonic()
         world_landmarks = results.pose_world_landmarks.landmark
         image_landmarks = (
             results.pose_landmarks.landmark if results.pose_landmarks else None
         )
 
         for index, landmark in enumerate(world_landmarks[:LANDMARK_COUNT]):
-            filtered_x = self.coordinate_filters[index][0](timestamp, landmark.x)
-            filtered_y = self.coordinate_filters[index][1](timestamp, landmark.y)
-            filtered_z = self.coordinate_filters[index][2](timestamp, landmark.z)
-
+            # Use image-space visibility (more reliable than world landmark visibility).
             visibility = landmark.visibility
             if image_landmarks is not None and index < len(image_landmarks):
                 visibility = image_landmarks[index].visibility
 
             base = index * VALUES_PER_LANDMARK
-            data[base] = float(filtered_x)
-            data[base + 1] = float(filtered_y)
-            data[base + 2] = float(filtered_z)
+            data[base]     = float(landmark.x)
+            data[base + 1] = float(landmark.y)
+            data[base + 2] = float(landmark.z)
             data[base + 3] = float(visibility)
 
         return data
