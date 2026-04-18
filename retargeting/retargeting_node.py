@@ -33,6 +33,7 @@ from coordinate_transform import (
 
 
 EXPECTED = 33 * 4
+MIME_TOPIC = "/mediapipe/pose_landmarks"
 
 # Landmark indices imported from coordinate_transform (single source of truth).
 
@@ -103,6 +104,7 @@ CONTROLLER_JOINTS = [
 _NEUTRAL = {name: 0.0 for name in CONTROLLER_JOINTS}
 ENABLE_LEG_TRACKING = True
 DEBUG_UPPER_BODY_ONLY = False
+ENABLE_2D_UPPER_BODY_MIME = True
 
 
 # ── Math helpers ───────────────────────────────────────────────────────────────
@@ -141,6 +143,88 @@ def _camera_roll(segment: np.ndarray, right: np.ndarray, up: np.ndarray) -> floa
         return 0.0
     unit = segment / norm
     return float(math.atan2(np.dot(unit, right), -np.dot(unit, up)))
+
+
+def _angle_at(a: np.ndarray, vertex: np.ndarray, c: np.ndarray) -> float:
+    """2D/3D angle at vertex, in radians."""
+    v1 = a - vertex
+    v2 = c - vertex
+    denom = np.linalg.norm(v1) * np.linalg.norm(v2)
+    if denom <= 1e-9:
+        return 0.0
+    cos_angle = float(np.dot(v1, v2) / denom)
+    return float(math.acos(float(np.clip(cos_angle, -1.0, 1.0))))
+
+
+def _arm_lift_from_image(shoulder: np.ndarray, elbow: np.ndarray) -> float:
+    """
+    Frontal-camera arm lift angle from image landmarks.
+
+    MediaPipe image coordinates have +x right and +y down.  This returns near 0
+    for an arm hanging down and near pi/2 for T-pose or hands-up style poses.
+    """
+    v = elbow[:2] - shoulder[:2]
+    if np.linalg.norm(v) <= 1e-9:
+        return 0.0
+
+    dx = abs(float(v[0]))
+    dy = float(v[1])
+    if dy < 0.0:
+        # Elbow above shoulder: visually this should look like a high arm.
+        return math.pi / 2.0
+    return float(math.atan2(dx, max(dy, 1e-3)))
+
+
+def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
+    """
+    Stage 1 hackathon mimicry: image-space head + arms only.
+
+    This intentionally avoids lower-body/free-balance retargeting.  It follows
+    the successful PyBullet reference pattern: compute simple 2D angles, then
+    command a small stable subset of joints while the robot stands.
+    """
+    joints: dict[str, float] = dict(STANDING_DEFAULTS)
+    lm = _make_lm(raw)
+
+    def clamp(name: str, value: float) -> float:
+        lo, hi = LIMITS[name]
+        return float(np.clip(value, lo, hi))
+
+    if not _ok(lm, L_SHOULDER, R_SHOULDER):
+        return joints
+
+    l_shoulder = lm[L_SHOULDER]
+    r_shoulder = lm[R_SHOULDER]
+    shoulder_mid = (l_shoulder + r_shoulder) / 2.0
+    shoulder_width = float(np.linalg.norm((r_shoulder - l_shoulder)[:2]))
+    if shoulder_width <= 1e-6:
+        shoulder_width = 1.0
+
+    if _ok(lm, NOSE):
+        nose_delta = lm[NOSE][:2] - shoulder_mid[:2]
+        joints["head_pan"] = clamp("head_pan", 0.9 * float(nose_delta[0]) / shoulder_width)
+        # Keep tilt conservative; large head tilt targets can distract from arm debugging.
+        joints["head_tilt"] = clamp("head_tilt", -0.25 * float(nose_delta[1]) / shoulder_width)
+
+    if _ok(lm, L_SHOULDER, L_ELBOW):
+        lift = _arm_lift_from_image(lm[L_SHOULDER], lm[L_ELBOW])
+        joints["l_sho_roll"] = clamp("l_sho_roll", -max(abs(STANDING_DEFAULTS["l_sho_roll"]), lift))
+        joints["l_sho_pitch"] = STANDING_DEFAULTS["l_sho_pitch"]
+
+    if _ok(lm, R_SHOULDER, R_ELBOW):
+        lift = _arm_lift_from_image(lm[R_SHOULDER], lm[R_ELBOW])
+        joints["r_sho_roll"] = clamp("r_sho_roll", max(abs(STANDING_DEFAULTS["r_sho_roll"]), lift))
+        joints["r_sho_pitch"] = STANDING_DEFAULTS["r_sho_pitch"]
+
+    if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
+        elbow_angle = _angle_at(lm[L_SHOULDER][:2], lm[L_ELBOW][:2], lm[L_WRIST][:2])
+        joints["l_el"] = clamp("l_el", math.pi - elbow_angle)
+
+    if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
+        elbow_angle = _angle_at(lm[R_SHOULDER][:2], lm[R_ELBOW][:2], lm[R_WRIST][:2])
+        joints["r_el"] = clamp("r_el", math.pi - elbow_angle)
+
+    return joints
 
 
 # ── Visibility-filtered landmark array ────────────────────────────────────────
@@ -308,7 +392,7 @@ class RetargetingNode(Node):
         self._pub = self.create_publisher(JointState, "/op3/joint_commands", 10)
         self.create_subscription(
             Float32MultiArray,
-            "/mediapipe/pose_world_landmarks",
+            MIME_TOPIC if ENABLE_2D_UPPER_BODY_MIME else "/mediapipe/pose_world_landmarks",
             self._cb,
             10,
         )
@@ -320,16 +404,25 @@ class RetargetingNode(Node):
         }
         self._last_log = time.monotonic()
         self._leg_track_log = 0.0
-        self.get_logger().info(
-            "retargeting_node ready — upper VIS≥0.20  lower VIS≥0.40  foot VIS≥0.60"
-        )
+        if ENABLE_2D_UPPER_BODY_MIME:
+            self.get_logger().info(
+                f"retargeting_node ready — STAGE 1 2D upper-body mime from {MIME_TOPIC}"
+            )
+        else:
+            self.get_logger().info(
+                "retargeting_node ready — 3D world retargeting mode"
+            )
 
     def _cb(self, msg: Float32MultiArray) -> None:
         if len(msg.data) != EXPECTED:
             return
 
         raw = np.asarray(msg.data, dtype=np.float64).reshape(33, 4)
-        joints   = compute_joints(raw)
+        joints = (
+            compute_upper_body_mime_joints(raw)
+            if ENABLE_2D_UPPER_BODY_MIME
+            else compute_joints(raw)
+        )
         t        = time.monotonic()
         smoothed = {name: self._filters[name](t, v) for name, v in joints.items()}
         cmd      = build_command(smoothed)
