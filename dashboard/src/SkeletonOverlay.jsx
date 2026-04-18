@@ -17,6 +17,7 @@ const CONNECTIONS = [
 
 const VALUES_PER_LANDMARK = 4;
 const LANDMARK_COUNT = 33;
+const MIN_VISIBILITY = 0.35;
 
 export default function SkeletonOverlay({
   landmarks,
@@ -50,15 +51,21 @@ export default function SkeletonOverlay({
       const base = index * VALUES_PER_LANDMARK;
       const x = Number(landmarks[base]);
       const y = Number(landmarks[base + 1]);
+      const visibility = Number(landmarks[base + 3]);
 
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(visibility) ||
+        visibility < MIN_VISIBILITY
+      ) {
         points.push(null);
         continue;
       }
 
       points.push({
-        x: x * width,
-        y: y * height,
+        x: Math.max(0, Math.min(1, x)) * width,
+        y: Math.max(0, Math.min(1, y)) * height,
       });
     }
 

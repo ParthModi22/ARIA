@@ -44,7 +44,7 @@ export default function App() {
 
     const landmarksTopic = new ROSLIB.Topic({
       ros,
-      name: "/mediapipe/pose_world_landmarks",
+      name: "/mediapipe/pose_landmarks",
       messageType: "std_msgs/msg/Float32MultiArray",
     });
 

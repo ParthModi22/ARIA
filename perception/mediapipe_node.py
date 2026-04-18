@@ -35,9 +35,14 @@ class MediaPipeNode(Node):
         super().__init__("mediapipe_node")
 
         self.bridge = CvBridge()
-        self.pose_publisher = self.create_publisher(
+        self.pose_world_publisher = self.create_publisher(
             Float32MultiArray,
             "/mediapipe/pose_world_landmarks",
+            10,
+        )
+        self.pose_image_publisher = self.create_publisher(
+            Float32MultiArray,
+            "/mediapipe/pose_landmarks",
             10,
         )
         self.image_publisher = self.create_publisher(Image, "/camera/image_raw", 10)
@@ -76,9 +81,13 @@ class MediaPipeNode(Node):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.pose.process(rgb_frame)
 
-        landmark_msg = Float32MultiArray()
-        landmark_msg.data = self._build_landmark_payload(results)
-        self.pose_publisher.publish(landmark_msg)
+        world_landmark_msg = Float32MultiArray()
+        world_landmark_msg.data = self._build_world_landmark_payload(results)
+        self.pose_world_publisher.publish(world_landmark_msg)
+
+        image_landmark_msg = Float32MultiArray()
+        image_landmark_msg.data = self._build_image_landmark_payload(results)
+        self.pose_image_publisher.publish(image_landmark_msg)
 
         annotated_frame = self._annotate_frame(frame, results)
         cv2.imshow("MediaPipe Pose", annotated_frame)
@@ -88,12 +97,16 @@ class MediaPipeNode(Node):
         image_msg.header.frame_id = "camera"
         self.image_publisher.publish(image_msg)
 
-    def _build_landmark_payload(self, results) -> List[float]:
+    def _empty_landmark_payload(self) -> List[float]:
         data = [math.nan] * (LANDMARK_COUNT * VALUES_PER_LANDMARK)
+        for index in range(LANDMARK_COUNT):
+            data[index * VALUES_PER_LANDMARK + 3] = 0.0
+        return data
+
+    def _build_world_landmark_payload(self, results) -> List[float]:
+        data = self._empty_landmark_payload()
 
         if not results.pose_world_landmarks:
-            for index in range(LANDMARK_COUNT):
-                data[index * VALUES_PER_LANDMARK + 3] = 0.0
             return data
 
         timestamp = time.monotonic()
@@ -116,6 +129,21 @@ class MediaPipeNode(Node):
             data[base + 1] = float(filtered_y)
             data[base + 2] = float(filtered_z)
             data[base + 3] = float(visibility)
+
+        return data
+
+    def _build_image_landmark_payload(self, results) -> List[float]:
+        data = self._empty_landmark_payload()
+
+        if not results.pose_landmarks:
+            return data
+
+        for index, landmark in enumerate(results.pose_landmarks.landmark[:LANDMARK_COUNT]):
+            base = index * VALUES_PER_LANDMARK
+            data[base] = float(landmark.x)
+            data[base + 1] = float(landmark.y)
+            data[base + 2] = float(landmark.z)
+            data[base + 3] = float(landmark.visibility)
 
         return data
 

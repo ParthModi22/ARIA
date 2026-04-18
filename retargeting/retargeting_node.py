@@ -1,164 +1,245 @@
-"""ROS 2 node that retargets MediaPipe pose landmarks into OP3 joint commands."""
+"""Retargeting: MediaPipe world landmarks → OP3 joint angles via body-relative decomposition."""
 
 from __future__ import annotations
 
 import math
+import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import rclpy
-import yaml
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray
 
-
-EXPECTED_FLOAT_COUNT = 33 * 4
-LANDMARK_COUNT = 33
-VALUES_PER_LANDMARK = 4
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "perception"))
+from one_euro_filter import OneEuroFilter
 
 
-@dataclass(frozen=True)
-class JointConfig:
-    """Joint configuration loaded from YAML."""
+EXPECTED = 33 * 4
 
-    name: str
-    mediapipe_landmarks: tuple[int, int, int]
-    minimum: float
-    maximum: float
-    invert: bool
-    offset: float
+# ── MediaPipe landmark indices ─────────────────────────────────────────────────
+NOSE = 0
+L_EAR,      R_EAR      = 7,  8
+L_SHOULDER, R_SHOULDER = 11, 12
+L_ELBOW,    R_ELBOW    = 13, 14
+L_WRIST,    R_WRIST    = 15, 16
+L_HIP,      R_HIP      = 23, 24
+L_KNEE,     R_KNEE     = 25, 26
+L_ANKLE,    R_ANKLE    = 27, 28
+L_FOOT,     R_FOOT     = 31, 32
 
+# ── Joint limits [rad] ─────────────────────────────────────────────────────────
+LIMITS: dict[str, tuple[float, float]] = {
+    "head_pan":    (-1.5,  1.5),
+    "head_tilt":   (-1.0,  1.0),
+    "l_sho_pitch": (-2.0,  2.0),
+    "r_sho_pitch": (-2.0,  2.0),
+    "l_sho_roll":  (-1.6,  1.6),
+    "r_sho_roll":  (-1.6,  1.6),
+    "l_el":        ( 0.0,  2.4),
+    "r_el":        ( 0.0,  2.4),
+    "l_hip_pitch": (-1.8,  1.8),
+    "r_hip_pitch": (-1.8,  1.8),
+    "l_hip_roll":  (-0.8,  0.8),
+    "r_hip_roll":  (-0.8,  0.8),
+    "l_knee":      ( 0.0,  2.1),
+    "r_knee":      ( 0.0,  2.1),
+    "l_ank_pitch": (-1.0,  1.0),
+    "r_ank_pitch": (-1.0,  1.0),
+}
+JOINT_NAMES = list(LIMITS.keys())
+CONTROLLER_JOINTS = [
+    "l_sho_pitch",
+    "r_sho_pitch",
+    "l_sho_roll",
+    "r_sho_roll",
+    "l_el",
+    "r_el",
+    "l_hip_yaw",
+    "r_hip_yaw",
+    "l_hip_roll",
+    "r_hip_roll",
+    "l_hip_pitch",
+    "r_hip_pitch",
+    "l_knee",
+    "r_knee",
+    "l_ank_pitch",
+    "r_ank_pitch",
+    "l_ank_roll",
+    "r_ank_roll",
+    "head_pan",
+    "head_tilt",
+]
+NEUTRAL_COMMAND = {name: 0.0 for name in CONTROLLER_JOINTS}
+
+
+# ── Math helpers ───────────────────────────────────────────────────────────────
+
+def _n(v: np.ndarray) -> np.ndarray:
+    """Normalize; returns zero vector if near-zero."""
+    mag = np.linalg.norm(v)
+    return v / mag if mag > 1e-9 else np.zeros(3)
+
+
+def _bend(a: np.ndarray, vertex: np.ndarray, c: np.ndarray) -> float:
+    """Angle at vertex between rays vertex→a and vertex→c, in [0, π]."""
+    v1, v2 = a - vertex, c - vertex
+    denom = np.linalg.norm(v1) * np.linalg.norm(v2)
+    if denom < 1e-9:
+        return 0.0
+    return float(math.acos(float(np.clip(np.dot(v1, v2) / denom, -1.0, 1.0))))
+
+
+def _ok(lm: list[np.ndarray], *indices: int) -> bool:
+    """True when none of the requested landmarks contain NaN."""
+    return all(not np.isnan(lm[i]).any() for i in indices)
+
+
+# ── Core retargeting ───────────────────────────────────────────────────────────
+
+def compute_joints(lm: list[np.ndarray]) -> dict[str, float]:
+    """
+    Build a body-fixed frame from torso landmarks, then decompose each limb
+    segment into that frame to produce true pitch and roll angles.
+
+    Body frame (person-relative):
+      up    = hip-midpoint → shoulder-midpoint
+      right = left-shoulder → right-shoulder  (person's right)
+      fwd   = cross(right, up)                (toward camera)
+
+    Shoulder pitch  = arm in the sagittal plane  (fwd / up)
+    Shoulder roll   = arm in the frontal  plane  (right / up)
+    Hip pitch/roll  = thigh decomposed the same way
+    """
+    joints: dict[str, float] = {name: 0.0 for name in JOINT_NAMES}
+
+    def clamp(name: str, val: float) -> float:
+        lo, hi = LIMITS[name]
+        return float(np.clip(val, lo, hi))
+
+    # Body frame requires core torso landmarks
+    if not _ok(lm, L_SHOULDER, R_SHOULDER, L_HIP, R_HIP):
+        return joints
+
+    shoulder_mid = (lm[L_SHOULDER] + lm[R_SHOULDER]) / 2.0
+    hip_mid      = (lm[L_HIP]      + lm[R_HIP])      / 2.0
+
+    up    = _n(shoulder_mid - hip_mid)
+    right = _n(lm[R_SHOULDER] - lm[L_SHOULDER])
+    fwd   = _n(np.cross(right, up))
+
+    # ── Head ──────────────────────────────────────────────────────────────────
+    if _ok(lm, NOSE):
+        h = lm[NOSE] - shoulder_mid
+        joints["head_pan"]  = clamp("head_pan",  math.atan2( np.dot(h, right), np.dot(h, up)))
+        joints["head_tilt"] = clamp("head_tilt", math.atan2(-np.dot(h, fwd),   np.dot(h, up)) * 0.5)
+
+    # ── Left arm ──────────────────────────────────────────────────────────────
+    if _ok(lm, L_SHOULDER, L_ELBOW):
+        la = lm[L_ELBOW] - lm[L_SHOULDER]
+        joints["l_sho_pitch"] = clamp("l_sho_pitch",  math.atan2( np.dot(la, fwd),   -np.dot(la, up)))
+        joints["l_sho_roll"]  = clamp("l_sho_roll",   math.atan2(-np.dot(la, right), -np.dot(la, up)))
+
+    if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
+        joints["l_el"] = clamp("l_el", _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST]))
+
+    # ── Right arm (pitch sign flipped: OP3 r_sho_pitch is mirrored) ───────────
+    if _ok(lm, R_SHOULDER, R_ELBOW):
+        ra = lm[R_ELBOW] - lm[R_SHOULDER]
+        joints["r_sho_pitch"] = clamp("r_sho_pitch", math.atan2(-np.dot(ra, fwd),   -np.dot(ra, up)))
+        joints["r_sho_roll"]  = clamp("r_sho_roll",  math.atan2( np.dot(ra, right), -np.dot(ra, up)))
+
+    if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
+        joints["r_el"] = clamp("r_el", _bend(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST]))
+
+    # ── Left leg ──────────────────────────────────────────────────────────────
+    if _ok(lm, L_HIP, L_KNEE):
+        lt = lm[L_KNEE] - lm[L_HIP]
+        joints["l_hip_pitch"] = clamp("l_hip_pitch",  math.atan2( np.dot(lt, fwd),   -np.dot(lt, up)))
+        joints["l_hip_roll"]  = clamp("l_hip_roll",   math.atan2(-np.dot(lt, right), -np.dot(lt, up)))
+
+    if _ok(lm, L_HIP, L_KNEE, L_ANKLE):
+        # π when straight, decreases when bent → subtract from π so 0=straight, +ve=bent
+        joints["l_knee"] = clamp("l_knee", math.pi - _bend(lm[L_HIP], lm[L_KNEE], lm[L_ANKLE]))
+
+    if _ok(lm, L_KNEE, L_ANKLE, L_FOOT):
+        # foot perpendicular to leg = π/2 → neutral ankle; offset by π/2 so 0=neutral
+        joints["l_ank_pitch"] = clamp("l_ank_pitch", _bend(lm[L_KNEE], lm[L_ANKLE], lm[L_FOOT]) - math.pi / 2.0)
+
+    # ── Right leg ─────────────────────────────────────────────────────────────
+    if _ok(lm, R_HIP, R_KNEE):
+        rt = lm[R_KNEE] - lm[R_HIP]
+        joints["r_hip_pitch"] = clamp("r_hip_pitch", math.atan2( np.dot(rt, fwd),   -np.dot(rt, up)))
+        joints["r_hip_roll"]  = clamp("r_hip_roll",  math.atan2( np.dot(rt, right), -np.dot(rt, up)))
+
+    if _ok(lm, R_HIP, R_KNEE, R_ANKLE):
+        joints["r_knee"] = clamp("r_knee", math.pi - _bend(lm[R_HIP], lm[R_KNEE], lm[R_ANKLE]))
+
+    if _ok(lm, R_KNEE, R_ANKLE, R_FOOT):
+        joints["r_ank_pitch"] = clamp("r_ank_pitch", _bend(lm[R_KNEE], lm[R_ANKLE], lm[R_FOOT]) - math.pi / 2.0)
+
+    return joints
+
+
+def build_controller_command(joints: dict[str, float]) -> dict[str, float]:
+    """Expand the retargeted subset into the full OP3 controller joint set."""
+    command = dict(NEUTRAL_COMMAND)
+    command.update(joints)
+    return command
+
+
+# ── ROS 2 node ─────────────────────────────────────────────────────────────────
 
 class RetargetingNode(Node):
-    """Convert MediaPipe world landmarks into clamped joint positions."""
-
     def __init__(self) -> None:
         super().__init__("retargeting_node")
 
-        self.joint_configs = self._load_joint_configs()
-        self.publisher = self.create_publisher(JointState, "/op3/joint_commands", 10)
-        self.subscription = self.create_subscription(
+        self._publisher = self.create_publisher(JointState, "/op3/joint_commands", 10)
+        self._subscription = self.create_subscription(
             Float32MultiArray,
             "/mediapipe/pose_world_landmarks",
-            self.landmarks_callback,
+            self._callback,
             10,
         )
 
-        self._last_timing_log = time.monotonic()
-        self.get_logger().info(
-            f"retargeting_node started with {len(self.joint_configs)} configured joints"
-        )
+        # One-Euro filters on output angles — smooths jitter without adding lag
+        self._filters: dict[str, OneEuroFilter] = {
+            name: OneEuroFilter(min_cutoff=0.5, beta=0.05)
+            for name in JOINT_NAMES
+        }
+        self._last_log = time.monotonic()
+        self.get_logger().info("retargeting_node started — 16 joints, body-relative decomposition")
 
-    def _load_joint_configs(self) -> list[JointConfig]:
-        config_path = Path(__file__).with_name("op3_joint_limits.yaml")
-        with config_path.open("r", encoding="utf-8") as stream:
-            raw_config = yaml.safe_load(stream) or {}
-
-        joint_limits = raw_config.get("joint_limits")
-        if not isinstance(joint_limits, dict) or not joint_limits:
-            raise ValueError("op3_joint_limits.yaml must define a non-empty joint_limits map")
-
-        configs: list[JointConfig] = []
-        for joint_name, spec in joint_limits.items():
-            if not isinstance(spec, dict):
-                raise ValueError(f"Joint '{joint_name}' config must be a mapping")
-
-            indices = spec.get("mediapipe_landmarks")
-            if not isinstance(indices, list) or len(indices) != 3:
-                raise ValueError(
-                    f"Joint '{joint_name}' must define mediapipe_landmarks as 3 indices"
-                )
-
-            configs.append(
-                JointConfig(
-                    name=str(joint_name),
-                    mediapipe_landmarks=tuple(int(index) for index in indices),
-                    minimum=float(spec["min"]),
-                    maximum=float(spec["max"]),
-                    invert=bool(spec.get("invert", False)),
-                    offset=float(spec.get("offset", 0.0)),
-                )
-            )
-
-        return configs
-
-    def landmarks_callback(self, msg: Float32MultiArray) -> None:
-        start_time = time.perf_counter()
-
-        if len(msg.data) != EXPECTED_FLOAT_COUNT:
-            self.get_logger().warning(
-                f"Expected {EXPECTED_FLOAT_COUNT} floats, received {len(msg.data)}"
-            )
+    def _callback(self, msg: Float32MultiArray) -> None:
+        if len(msg.data) != EXPECTED:
             return
 
-        landmarks = self._unpack_landmarks(msg.data)
-        joint_state = JointState()
-        joint_state.header.stamp = self.get_clock().now().to_msg()
-        joint_state.name = [config.name for config in self.joint_configs]
-        joint_state.position = [
-            self._compute_joint_position(config, landmarks) for config in self.joint_configs
-        ]
-        self.publisher.publish(joint_state)
+        raw = np.asarray(msg.data, dtype=np.float64).reshape(33, 4)
+        lm = [raw[i, :3] for i in range(33)]
 
-        compute_time_ms = (time.perf_counter() - start_time) * 1000.0
-        now = time.monotonic()
-        if now - self._last_timing_log >= 5.0:
-            self.get_logger().info(f"Retargeting compute time: {compute_time_ms:.2f} ms")
-            self._last_timing_log = now
+        joints = compute_joints(lm)
 
-    def _unpack_landmarks(self, flat_data: list[float]) -> list[np.ndarray]:
-        points: list[np.ndarray] = []
+        t = time.monotonic()
+        smoothed = {name: self._filters[name](t, angle) for name, angle in joints.items()}
 
-        for index in range(LANDMARK_COUNT):
-            base = index * VALUES_PER_LANDMARK
-            mp_x = float(flat_data[base])
-            mp_y = float(flat_data[base + 1])
-            mp_z = float(flat_data[base + 2])
-            _visibility = float(flat_data[base + 3])
+        command = build_controller_command(smoothed)
 
-            ros_point = np.array(
-                [-mp_z, -mp_x, -mp_y],
-                dtype=np.float64,
-            )
-            points.append(ros_point)
+        out = JointState()
+        out.header.stamp = self.get_clock().now().to_msg()
+        out.name = list(CONTROLLER_JOINTS)
+        out.position = [float(command[name]) for name in CONTROLLER_JOINTS]
+        self._publisher.publish(out)
 
-        return points
-
-    def _compute_joint_position(
-        self,
-        config: JointConfig,
-        landmarks: list[np.ndarray],
-    ) -> float:
-        a_idx, vertex_idx, c_idx = config.mediapipe_landmarks
-        a = landmarks[a_idx]
-        vertex = landmarks[vertex_idx]
-        c = landmarks[c_idx]
-
-        v1 = a - vertex
-        v2 = c - vertex
-
-        norm_product = np.linalg.norm(v1) * np.linalg.norm(v2)
-        if norm_product <= 1e-9 or np.isnan(norm_product):
-            angle = 0.0
-        else:
-            cosine = float(np.dot(v1, v2) / norm_product)
-            cosine = float(np.clip(cosine, -1.0, 1.0))
-            angle = float(math.acos(cosine))
-
-        if config.invert:
-            angle = -angle
-
-        angle += config.offset
-        return float(np.clip(angle, config.minimum, config.maximum))
+        if t - self._last_log >= 5.0:
+            self.get_logger().info("Retargeting running")
+            self._last_log = t
 
 
 def main(args: list[str] | None = None) -> None:
     rclpy.init(args=args)
     node = RetargetingNode()
-
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
