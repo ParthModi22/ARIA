@@ -94,6 +94,7 @@ CONTROLLER_JOINTS = [
     "head_pan",    "head_tilt",
 ]
 _NEUTRAL = {name: 0.0 for name in CONTROLLER_JOINTS}
+ENABLE_LEG_TRACKING = False
 
 
 # ── Math helpers ───────────────────────────────────────────────────────────────
@@ -114,6 +115,20 @@ def _bend(a: np.ndarray, vertex: np.ndarray, c: np.ndarray) -> float:
 
 def _ok(lm: list[np.ndarray], *idx: int) -> bool:
     return all(not np.isnan(lm[i]).any() for i in idx)
+
+
+def _stable_pitch(segment: np.ndarray, fwd: np.ndarray) -> float:
+    """
+    Forward/backward pitch that stays near zero for arms hanging down or
+    stretched sideways, instead of spuriously jumping toward +/- pi/2.
+    """
+    norm = np.linalg.norm(segment)
+    if norm <= 1e-9:
+        return 0.0
+    unit = segment / norm
+    seg_fwd = float(np.dot(unit, fwd))
+    seg_non_fwd = math.sqrt(max(0.0, 1.0 - seg_fwd * seg_fwd))
+    return float(math.atan2(seg_fwd, max(seg_non_fwd, 1e-9)))
 
 
 # ── Visibility-filtered landmark array ────────────────────────────────────────
@@ -183,8 +198,8 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
     # ── Left arm ─────────────────────────────────────────────────────────────
     if _ok(lm, L_SHOULDER, L_ELBOW):
         la = lm[L_ELBOW] - lm[L_SHOULDER]
-        # pitch: +fwd component → positive pitch (arm raises forward)
-        joints["l_sho_pitch"] = clamp("l_sho_pitch", math.atan2( np.dot(la, fwd),   -np.dot(la, up)))
+        # Stable forward/backward pitch: T-pose stays near 0 instead of jumping upward.
+        joints["l_sho_pitch"] = clamp("l_sho_pitch", _stable_pitch(la, fwd))
         # roll: arm to LEFT (la≈−right) → dot=−1 → negative = abduction (correct: init −0.3)
         joints["l_sho_roll"]  = clamp("l_sho_roll",  math.atan2( np.dot(la, right),  -np.dot(la, up)))
 
@@ -195,7 +210,7 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
     # ── Right arm ────────────────────────────────────────────────────────────
     if _ok(lm, R_SHOULDER, R_ELBOW):
         ra = lm[R_ELBOW] - lm[R_SHOULDER]
-        joints["r_sho_pitch"] = clamp("r_sho_pitch", math.atan2( np.dot(ra, fwd),   -np.dot(ra, up)))
+        joints["r_sho_pitch"] = clamp("r_sho_pitch", _stable_pitch(ra, fwd))
         # roll: arm to RIGHT (ra≈+right) → dot=+1 → positive = abduction (correct: init +0.3)
         joints["r_sho_roll"]  = clamp("r_sho_roll",  math.atan2( np.dot(ra, right),  -np.dot(ra, up)))
 
@@ -206,7 +221,7 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
     # Only compute legs when BOTH hips AND both knees are visible.
     # If just one leg is tracked the robot gets an asymmetric "raised knee" pose
     # because one side computes to ~0 while the other falls back to ±π/6.
-    both_hips_knees = _ok(lm, L_HIP, L_KNEE, R_HIP, R_KNEE)
+    both_hips_knees = ENABLE_LEG_TRACKING and _ok(lm, L_HIP, L_KNEE, R_HIP, R_KNEE)
 
     if both_hips_knees:
         # Left thigh vector: knee − hip
