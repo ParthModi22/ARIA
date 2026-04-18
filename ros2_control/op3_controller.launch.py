@@ -17,7 +17,17 @@ def _build_robot_description(xacro_path: Path, controller_config: Path) -> str:
 
 def generate_launch_description() -> LaunchDescription:
     os.environ["GAZEBO_MODEL_DATABASE_URI"] = ""
-    os.environ["GAZEBO_MODEL_PATH"] = "/home/parv/ros2_ws/install/op3_description/share/op3_description/models"
+    default_model_path = os.environ.get("GAZEBO_MODEL_PATH", "")
+    try:
+        op3_description_share = Path(get_package_share_directory("op3_description"))
+        discovered_model_path = str(op3_description_share / "models")
+    except Exception:
+        discovered_model_path = ""
+
+    if discovered_model_path:
+        os.environ["GAZEBO_MODEL_PATH"] = discovered_model_path
+    elif default_model_path:
+        os.environ["GAZEBO_MODEL_PATH"] = default_model_path
     os.environ["GDK_BACKEND"] = "x11"
     os.environ["QT_QPA_PLATFORM"] = "xcb"
     os.environ["XDG_SESSION_TYPE"] = "x11"

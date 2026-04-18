@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from typing import List
 
@@ -14,7 +15,6 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import rclpy
-from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float32MultiArray
@@ -27,6 +27,24 @@ VALUES_PER_LANDMARK = 4
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 
+try:
+    from cv_bridge import CvBridge
+
+    CV_BRIDGE_AVAILABLE = True
+except Exception:
+    CvBridge = None
+    CV_BRIDGE_AVAILABLE = False
+
+
+def _resolve_mediapipe_solutions():
+    solutions = getattr(mp, "solutions", None)
+    if solutions is not None:
+        return solutions
+
+    from mediapipe.python import solutions as mp_solutions
+
+    return mp_solutions
+
 
 class MediaPipeNode(Node):
     """Capture webcam frames, estimate pose, and publish ROS topics."""
@@ -34,13 +52,30 @@ class MediaPipeNode(Node):
     def __init__(self) -> None:
         super().__init__("mediapipe_node")
 
-        self.bridge = CvBridge()
+        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        self.declare_parameter("show_debug_window", has_display)
+        self._show_debug_window = (
+            self.get_parameter("show_debug_window").get_parameter_value().bool_value
+        )
+
+        if self._show_debug_window and not has_display:
+            self.get_logger().warning(
+                "show_debug_window requested but no desktop display found; disabling preview window"
+            )
+            self._show_debug_window = False
+
+        self.bridge = CvBridge() if CV_BRIDGE_AVAILABLE else None
         self.pose_publisher = self.create_publisher(
             Float32MultiArray,
             "/mediapipe/pose_world_landmarks",
             10,
         )
         self.image_publisher = self.create_publisher(Image, "/camera/image_raw", 10)
+
+        if not CV_BRIDGE_AVAILABLE:
+            self.get_logger().warning(
+                "cv_bridge unavailable; /camera/image_raw publishing disabled (landmarks continue)"
+            )
 
         self.capture = cv2.VideoCapture(0)
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
@@ -49,9 +84,10 @@ class MediaPipeNode(Node):
         if not self.capture.isOpened():
             raise RuntimeError("Unable to open webcam on cv2.VideoCapture(0)")
 
-        self.mp_pose = mp.solutions.pose
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
+        mp_solutions = _resolve_mediapipe_solutions()
+        self.mp_pose = mp_solutions.pose
+        self.mp_drawing = mp_solutions.drawing_utils
+        self.mp_drawing_styles = mp_solutions.drawing_styles
         self.pose = self.mp_pose.Pose(
             model_complexity=1,
             smooth_landmarks=True,
@@ -81,12 +117,16 @@ class MediaPipeNode(Node):
         self.pose_publisher.publish(landmark_msg)
 
         annotated_frame = self._annotate_frame(frame, results)
-        cv2.imshow("MediaPipe Pose", annotated_frame)
-        cv2.waitKey(1)
-        image_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
-        image_msg.header.stamp = self.get_clock().now().to_msg()
-        image_msg.header.frame_id = "camera"
-        self.image_publisher.publish(image_msg)
+
+        if self._show_debug_window:
+            cv2.imshow("MediaPipe Pose", annotated_frame)
+            cv2.waitKey(1)
+
+        if self.bridge is not None:
+            image_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
+            image_msg.header.stamp = self.get_clock().now().to_msg()
+            image_msg.header.frame_id = "camera"
+            self.image_publisher.publish(image_msg)
 
     def _build_landmark_payload(self, results) -> List[float]:
         data = [math.nan] * (LANDMARK_COUNT * VALUES_PER_LANDMARK)

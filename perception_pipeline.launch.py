@@ -1,4 +1,4 @@
-"""Launch the full perception pipeline: mediapipe → classifier → retargeting."""
+"""Launch the full perception pipeline: mediapipe → classifier → full-body retargeting."""
 
 from pathlib import Path
 
@@ -20,7 +20,13 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     retargeting_node = ExecuteProcess(
-        cmd=["python3", str(base / "retargeting" / "retargeting_node.py")],
+        cmd=[
+            "python3",
+            str(base / "retargeting" / "moveit_ik_retargeting_node.py"),
+            "--ros-args",
+            "-p",
+            "use_ik:=true",
+        ],
         output="screen",
     )
 
