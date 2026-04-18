@@ -53,8 +53,7 @@ LIMITS: dict[str, tuple[float, float]] = {
     "l_sho_roll":  (-1.6,  1.6),
     "r_sho_roll":  (-1.6,  1.6),
     "l_el":        ( 0.0,  2.4),
-    # OP3 elbow axes are mirrored in practice: keep left positive, right negative.
-    "r_el":        (-2.4,  0.0),
+    "r_el":        ( 0.0,  2.4),
     "l_hip_pitch": (-1.8,  1.8),
     "r_hip_pitch": (-1.8,  1.8),
     "l_hip_roll":  (-0.8,  0.8),
@@ -116,12 +115,16 @@ ENABLE_LEG_TRACKING = True
 DEBUG_UPPER_BODY_ONLY = False
 ENABLE_2D_UPPER_BODY_MIME = True
 
-MIME_ARM_DOWN_DY = 0.08
-MIME_ARM_DOWN_RATIO = 0.35
-MIME_SHOULDER_PITCH_GAIN = 3.0
-MIME_SHOULDER_PITCH_DEADBAND = 0.04
+MIME_ARM_DOWN_DY = 0.06
+MIME_ARM_DOWN_RATIO = 0.55
+MIME_SHOULDER_ROLL_GAIN = 0.95
+MIME_SHOULDER_PITCH_GAIN = 1.6
+MIME_SHOULDER_PITCH_DEADBAND = 0.08
+MIME_SHOULDER_PITCH_LIMIT = 0.65
+LEFT_SHOULDER_PITCH_SIGN = 1.0
+RIGHT_SHOULDER_PITCH_SIGN = -1.0
 LEFT_ELBOW_SIGN = 1.0
-RIGHT_ELBOW_SIGN = -1.0
+RIGHT_ELBOW_SIGN = 1.0
 
 
 # ── Math helpers ───────────────────────────────────────────────────────────────
@@ -194,6 +197,19 @@ def _arm_lift_from_image(shoulder: np.ndarray, elbow: np.ndarray) -> float:
     return float(math.atan2(dx, max(dy, 1e-3)))
 
 
+def _arm_is_down_in_image(
+    shoulder: np.ndarray,
+    elbow: np.ndarray,
+    wrist: np.ndarray,
+    shoulder_width: float,
+) -> bool:
+    """True for the common relaxed pose: elbow and wrist below the shoulder."""
+    elbow_below = float(elbow[1] - shoulder[1]) > MIME_ARM_DOWN_DY
+    wrist_below = float(wrist[1] - shoulder[1]) > MIME_ARM_DOWN_DY * 2.0
+    wrist_near_body = abs(float(wrist[0] - shoulder[0])) < shoulder_width * 0.75
+    return elbow_below and wrist_below and wrist_near_body
+
+
 def _arm_pitch_from_image_depth(shoulder: np.ndarray, elbow: np.ndarray, wrist: np.ndarray) -> float:
     """
     Front/back shoulder pitch from MediaPipe image landmark depth.
@@ -201,10 +217,19 @@ def _arm_pitch_from_image_depth(shoulder: np.ndarray, elbow: np.ndarray, wrist: 
     In MediaPipe pose landmarks, smaller z means closer to the camera.  A hand
     coming toward the camera therefore gives positive shoulder_z - wrist_z.
     """
+    # When the hand is clearly above the shoulder, the visible gesture is an
+    # up/side gesture; depth noise should not pull the arm forward/back.
+    if float(wrist[1] - shoulder[1]) < -MIME_ARM_DOWN_DY:
+        return 0.0
+
     depth = float(shoulder[2] - 0.5 * (elbow[2] + wrist[2]))
     if abs(depth) < MIME_SHOULDER_PITCH_DEADBAND:
         return 0.0
-    return MIME_SHOULDER_PITCH_GAIN * depth
+    return float(np.clip(
+        MIME_SHOULDER_PITCH_GAIN * depth,
+        -MIME_SHOULDER_PITCH_LIMIT,
+        MIME_SHOULDER_PITCH_LIMIT,
+    ))
 
 
 def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
@@ -238,25 +263,37 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
         # Keep tilt conservative; large head tilt targets can distract from arm debugging.
         joints["head_tilt"] = clamp("head_tilt", -0.25 * float(nose_delta[1]) / shoulder_width)
 
-    if _ok(lm, L_SHOULDER, L_ELBOW):
-        lift = _arm_lift_from_image(lm[L_SHOULDER], lm[L_ELBOW])
-        joints["l_sho_roll"] = clamp("l_sho_roll", -lift)
-
-    if _ok(lm, R_SHOULDER, R_ELBOW):
-        lift = _arm_lift_from_image(lm[R_SHOULDER], lm[R_ELBOW])
-        joints["r_sho_roll"] = clamp("r_sho_roll", lift)
-
     if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
-        pitch = _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
-        joints["l_sho_pitch"] = clamp("l_sho_pitch", pitch)
-        elbow_angle = _angle_at(lm[L_SHOULDER][:2], lm[L_ELBOW][:2], lm[L_WRIST][:2])
-        joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - elbow_angle))
+        if _arm_is_down_in_image(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST], shoulder_width):
+            joints["l_sho_roll"] = 0.0
+            joints["l_sho_pitch"] = 0.0
+            joints["l_el"] = 0.0
+        else:
+            lift = max(
+                _arm_lift_from_image(lm[L_SHOULDER], lm[L_ELBOW]),
+                _arm_lift_from_image(lm[L_SHOULDER], lm[L_WRIST]),
+            )
+            joints["l_sho_roll"] = clamp("l_sho_roll", -MIME_SHOULDER_ROLL_GAIN * lift)
+            pitch = _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
+            joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch)
+            elbow_angle = _angle_at(lm[L_SHOULDER][:2], lm[L_ELBOW][:2], lm[L_WRIST][:2])
+            joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - elbow_angle))
 
     if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
-        pitch = _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
-        joints["r_sho_pitch"] = clamp("r_sho_pitch", pitch)
-        elbow_angle = _angle_at(lm[R_SHOULDER][:2], lm[R_ELBOW][:2], lm[R_WRIST][:2])
-        joints["r_el"] = clamp("r_el", RIGHT_ELBOW_SIGN * (math.pi - elbow_angle))
+        if _arm_is_down_in_image(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST], shoulder_width):
+            joints["r_sho_roll"] = 0.0
+            joints["r_sho_pitch"] = 0.0
+            joints["r_el"] = 0.0
+        else:
+            lift = max(
+                _arm_lift_from_image(lm[R_SHOULDER], lm[R_ELBOW]),
+                _arm_lift_from_image(lm[R_SHOULDER], lm[R_WRIST]),
+            )
+            joints["r_sho_roll"] = clamp("r_sho_roll", MIME_SHOULDER_ROLL_GAIN * lift)
+            pitch = _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
+            joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch)
+            elbow_angle = _angle_at(lm[R_SHOULDER][:2], lm[R_ELBOW][:2], lm[R_WRIST][:2])
+            joints["r_el"] = clamp("r_el", RIGHT_ELBOW_SIGN * (math.pi - elbow_angle))
 
     return joints
 
