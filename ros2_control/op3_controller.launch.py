@@ -17,7 +17,7 @@ def _build_robot_description(xacro_path: Path, controller_config: Path) -> str:
 
 def generate_launch_description() -> LaunchDescription:
     os.environ["GAZEBO_MODEL_DATABASE_URI"] = ""
-    os.environ["GAZEBO_MODEL_PATH"] = "/home/parv/ros2_ws/install/op3_description/share"
+    os.environ["GAZEBO_MODEL_PATH"] = "/home/parv/ros2_ws/install/op3_description/share/op3_description/models"
     os.environ["GDK_BACKEND"] = "x11"
     os.environ["QT_QPA_PLATFORM"] = "xcb"
     os.environ["XDG_SESSION_TYPE"] = "x11"
@@ -97,19 +97,6 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    joint_trajectory_controller = Node(
-        package="controller_manager",
-        executable="spawner",
-        output="screen",
-        arguments=[
-            "joint_trajectory_controller",
-            "--controller-manager",
-            "/controller_manager",
-            "--param-file",
-            str(controller_config),
-        ],
-    )
-
     action_dispatcher = ExecuteProcess(
         cmd=["python3", str(Path(__file__).with_name("action_dispatcher.py"))],
         output="screen",
@@ -136,7 +123,6 @@ def generate_launch_description() -> LaunchDescription:
             spawn_op3,
             TimerAction(period=1.0, actions=[joint_state_broadcaster]),
             TimerAction(period=2.0, actions=[forward_position_controller]),
-            TimerAction(period=3.0, actions=[joint_trajectory_controller]),
             action_dispatcher,
             foxglove_bridge,
             web_video_server,
