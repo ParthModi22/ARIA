@@ -127,9 +127,9 @@ ENABLE_2D_UPPER_BODY_MIME = True
 
 MIME_ARM_DOWN_DY = 0.06
 MIME_ARM_DOWN_RATIO = 0.55
-MIME_SHOULDER_PITCH_GAIN = 2.6
-MIME_SHOULDER_PITCH_DEADBAND = 0.05
-MIME_SHOULDER_PITCH_LIMIT = 1.0
+MIME_SHOULDER_PITCH_GAIN = 3.0
+MIME_SHOULDER_PITCH_DEADBAND = 0.04
+MIME_SHOULDER_PITCH_LIMIT = 1.2
 LEFT_SHOULDER_PITCH_SIGN = 1.0
 RIGHT_SHOULDER_PITCH_SIGN = -1.0
 LEFT_ELBOW_SIGN = 1.0
@@ -302,9 +302,11 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
         joints["head_tilt"] = clamp("head_tilt", -0.25 * float(nose_delta[1]) / shoulder_width)
 
     if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
+        pitch = _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
         if _arm_is_down_in_image(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST], shoulder_width):
             joints["l_sho_roll"] = MIME_LEFT_ARM_DOWN_ROLL
-            joints["l_sho_pitch"] = 0.0
+            # Keep down-roll pose, but still allow front/back shoulder motion.
+            joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch)
             joints["l_el"] = 0.0
         else:
             roll = _arm_roll_from_image(
@@ -314,15 +316,16 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
                 is_left=True,
             )
             joints["l_sho_roll"] = clamp("l_sho_roll", roll)
-            pitch = _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
             joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch)
             elbow_angle = _angle_at(lm[L_SHOULDER][:2], lm[L_ELBOW][:2], lm[L_WRIST][:2])
             joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - elbow_angle))
 
     if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
+        pitch = _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
         if _arm_is_down_in_image(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST], shoulder_width):
             joints["r_sho_roll"] = MIME_RIGHT_ARM_DOWN_ROLL
-            joints["r_sho_pitch"] = 0.0
+            # Keep down-roll pose, but still allow front/back shoulder motion.
+            joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch)
             joints["r_el"] = 0.0
         else:
             roll = _arm_roll_from_image(
@@ -332,7 +335,6 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
                 is_left=False,
             )
             joints["r_sho_roll"] = clamp("r_sho_roll", roll)
-            pitch = _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
             joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch)
             elbow_angle = _angle_at(lm[R_SHOULDER][:2], lm[R_ELBOW][:2], lm[R_WRIST][:2])
             joints["r_el"] = clamp("r_el", RIGHT_ELBOW_SIGN * (math.pi - elbow_angle))
