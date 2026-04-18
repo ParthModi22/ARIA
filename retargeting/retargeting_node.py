@@ -127,7 +127,6 @@ ENABLE_2D_UPPER_BODY_MIME = True
 
 MIME_ARM_DOWN_DY = 0.06
 MIME_ARM_DOWN_RATIO = 0.55
-MIME_SHOULDER_ROLL_GAIN = 0.95
 MIME_SHOULDER_PITCH_GAIN = 2.6
 MIME_SHOULDER_PITCH_DEADBAND = 0.05
 MIME_SHOULDER_PITCH_LIMIT = 1.0
@@ -261,29 +260,14 @@ def _arm_roll_from_image(
     down_roll = MIME_LEFT_ARM_DOWN_ROLL if is_left else MIME_RIGHT_ARM_DOWN_ROLL
     up_roll = MIME_LEFT_ARM_UP_ROLL if is_left else MIME_RIGHT_ARM_UP_ROLL
 
-    if dy < -0.10:
-        return up_roll
-    if dx_ratio > 0.85 and dy < 0.28:
-        return MIME_ARM_SIDE_ROLL
-    return down_roll
+    # Continuous map:
+    # - down -> side by horizontal spread
+    # - side -> up when wrist rises above shoulder
+    side_alpha = float(np.clip(dx_ratio / 0.85, 0.0, 1.0))
+    shoulder_to_side = (1.0 - side_alpha) * down_roll + side_alpha * MIME_ARM_SIDE_ROLL
 
-
-def _front_pitch_from_image(
-    shoulder: np.ndarray,
-    wrist: np.ndarray,
-    shoulder_width: float,
-) -> float:
-    """
-    Coarse front/back pitch for "hands forward at chest level".
-
-    Use this only when the wrist is not far sideways or overhead; otherwise roll
-    is the primary visible gesture and pitch should stay quiet.
-    """
-    dy = float(wrist[1] - shoulder[1])
-    dx_ratio = abs(float(wrist[0] - shoulder[0])) / max(shoulder_width, 1e-6)
-    if dx_ratio > 0.85 or dy < -0.10 or dy > 0.42:
-        return 0.0
-    return float(np.interp(dy, [0.42, 0.05], [0.0, 0.85]))
+    up_alpha = float(np.clip((-dy - 0.02) / 0.28, 0.0, 1.0))
+    return (1.0 - up_alpha) * shoulder_to_side + up_alpha * up_roll
 
 
 def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
@@ -330,12 +314,7 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
                 is_left=True,
             )
             joints["l_sho_roll"] = clamp("l_sho_roll", roll)
-            pitch = _front_pitch_from_image(
-                lm[L_SHOULDER],
-                lm[L_WRIST],
-                shoulder_width,
-            )
-            pitch += _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
+            pitch = _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
             joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch)
             elbow_angle = _angle_at(lm[L_SHOULDER][:2], lm[L_ELBOW][:2], lm[L_WRIST][:2])
             joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - elbow_angle))
@@ -353,12 +332,7 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
                 is_left=False,
             )
             joints["r_sho_roll"] = clamp("r_sho_roll", roll)
-            pitch = _front_pitch_from_image(
-                lm[R_SHOULDER],
-                lm[R_WRIST],
-                shoulder_width,
-            )
-            pitch += _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
+            pitch = _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
             joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch)
             elbow_angle = _angle_at(lm[R_SHOULDER][:2], lm[R_ELBOW][:2], lm[R_WRIST][:2])
             joints["r_el"] = clamp("r_el", RIGHT_ELBOW_SIGN * (math.pi - elbow_angle))
@@ -461,8 +435,8 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
     # ── Left arm ─────────────────────────────────────────────────────────────
     if _ok(lm, L_SHOULDER, L_ELBOW):
         la = lm[L_ELBOW] - lm[L_SHOULDER]
-        # pitch: arm down→0, arm forward→+π/2, arm straight up→π (clamped 2.0)
-        joints["l_sho_pitch"] = clamp("l_sho_pitch", math.atan2(np.dot(la, fwd), -np.dot(la, up)))
+        # Pitch is only front/back reach component, decoupled from arm lift.
+        joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * _stable_pitch(la, fwd))
         # roll: arm to LEFT (la≈−right) → dot=−1 → negative = abduction (correct: init −0.3)
         joints["l_sho_roll"]  = clamp("l_sho_roll",  math.atan2( np.dot(la, right),  -np.dot(la, up)))
 
@@ -473,7 +447,7 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
     # ── Right arm ────────────────────────────────────────────────────────────
     if _ok(lm, R_SHOULDER, R_ELBOW):
         ra = lm[R_ELBOW] - lm[R_SHOULDER]
-        joints["r_sho_pitch"] = clamp("r_sho_pitch", math.atan2(np.dot(ra, fwd), -np.dot(ra, up)))
+        joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * _stable_pitch(ra, fwd))
         # roll: arm to RIGHT (ra≈+right) → dot=+1 → positive = abduction (correct: init +0.3)
         joints["r_sho_roll"]  = clamp("r_sho_roll",  math.atan2( np.dot(ra, right),  -np.dot(ra, up)))
 
