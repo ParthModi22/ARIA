@@ -27,15 +27,17 @@ CONTROLLER_JOINTS = [
     "head_pan",    "head_tilt",
 ]
 
-# Exactly matches op3_ros2_control.xacro initial_value to prevent startup jerk.
+# Stable demo fallback pose. Retargeting overwrites these values when landmarks
+# are available; this keeps the robot relaxed if perception briefly drops.
 _Q6 = math.pi / 6   # 0.5236 rad
 _Q3 = math.pi / 3   # 1.0472 rad
+_ARM_DOWN_PITCH = -1.15
 
 STANDING_POSE: dict[str, float] = {
-    "l_sho_pitch":  0.0,
-    "r_sho_pitch":  0.0,
-    "l_sho_roll":  -0.3,
-    "r_sho_roll":   0.3,
+    "l_sho_pitch":  _ARM_DOWN_PITCH,
+    "r_sho_pitch":  _ARM_DOWN_PITCH,
+    "l_sho_roll":   0.0,
+    "r_sho_roll":   0.0,
     "l_el":         0.0,
     "r_el":         0.0,
     "l_hip_yaw":    0.0,

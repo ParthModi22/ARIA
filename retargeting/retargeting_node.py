@@ -52,8 +52,10 @@ LIMITS: dict[str, tuple[float, float]] = {
     "r_sho_pitch": (-2.0,  2.0),
     "l_sho_roll":  (-1.6,  1.6),
     "r_sho_roll":  (-1.6,  1.6),
-    "l_el":        ( 0.0,  2.4),
-    "r_el":        ( 0.0,  2.4),
+    # In the current OP3/Gazebo model, positive elbow commands bend opposite to
+    # the human elbow visual, so the demo path uses negative elbow flex.
+    "l_el":        (-2.4,  0.0),
+    "r_el":        (-2.4,  0.0),
     "l_hip_pitch": (-1.8,  1.8),
     "r_hip_pitch": (-1.8,  1.8),
     "l_hip_roll":  (-0.8,  0.8),
@@ -69,6 +71,12 @@ JOINT_NAMES = list(LIMITS.keys())
 # Used when landmarks are invisible/unreliable.  Matches xacro initial_value.
 _Q6 = math.pi / 6   # 0.5236 rad (30°)
 _Q3 = math.pi / 3   # 1.0472 rad (60°)
+
+# Demo-calibrated OP3 arm rest. In this Gazebo model, shoulder pitch 0.0 leaves
+# the hands around chest height; this offset pulls them down to a relaxed pose.
+MIME_LEFT_SHOULDER_DOWN_PITCH = -1.15
+MIME_RIGHT_SHOULDER_DOWN_PITCH = -1.15
+MIME_SHOULDER_FRONT_PITCH = 0.0
 
 STANDING_DEFAULTS: dict[str, float] = {
     "head_pan":    0.0,
@@ -94,6 +102,8 @@ STANDING_DEFAULTS: dict[str, float] = {
 # much like "arms out" for the demo.
 MIME_STANDING_DEFAULTS: dict[str, float] = {
     **STANDING_DEFAULTS,
+    "l_sho_pitch": MIME_LEFT_SHOULDER_DOWN_PITCH,
+    "r_sho_pitch": MIME_RIGHT_SHOULDER_DOWN_PITCH,
     "l_sho_roll": 0.0,
     "r_sho_roll": 0.0,
 }
@@ -122,9 +132,9 @@ MIME_SHOULDER_PITCH_GAIN = 1.6
 MIME_SHOULDER_PITCH_DEADBAND = 0.08
 MIME_SHOULDER_PITCH_LIMIT = 0.65
 LEFT_SHOULDER_PITCH_SIGN = 1.0
-RIGHT_SHOULDER_PITCH_SIGN = -1.0
-LEFT_ELBOW_SIGN = 1.0
-RIGHT_ELBOW_SIGN = 1.0
+RIGHT_SHOULDER_PITCH_SIGN = 1.0
+LEFT_ELBOW_SIGN = -1.0
+RIGHT_ELBOW_SIGN = -1.0
 
 
 # ── Math helpers ───────────────────────────────────────────────────────────────
@@ -232,6 +242,32 @@ def _arm_pitch_from_image_depth(shoulder: np.ndarray, elbow: np.ndarray, wrist: 
     ))
 
 
+def _front_pitch_from_image(
+    shoulder: np.ndarray,
+    wrist: np.ndarray,
+    down_pitch: float,
+) -> float:
+    """
+    Coarse 2D shoulder pitch for the hackathon demo.
+
+    The MediaPipe depth estimate is noisy, so this primarily uses image height:
+    wrist down -> relaxed down-pitch; wrist at chest/shoulder level -> forward
+    pitch; wrist above shoulder -> forward pitch while shoulder roll raises it.
+    """
+    wrist_dy = float(wrist[1] - shoulder[1])
+    if wrist_dy > 0.42:
+        front_score = 0.0
+    elif wrist_dy < 0.05:
+        front_score = 1.0
+    else:
+        front_score = 1.0 - (wrist_dy - 0.05) / 0.37
+
+    return float(
+        down_pitch * (1.0 - front_score)
+        + MIME_SHOULDER_FRONT_PITCH * front_score
+    )
+
+
 def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
     """
     Stage 1 hackathon mimicry: image-space head + arms only.
@@ -266,7 +302,7 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
     if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
         if _arm_is_down_in_image(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST], shoulder_width):
             joints["l_sho_roll"] = 0.0
-            joints["l_sho_pitch"] = 0.0
+            joints["l_sho_pitch"] = MIME_LEFT_SHOULDER_DOWN_PITCH
             joints["l_el"] = 0.0
         else:
             lift = max(
@@ -274,7 +310,12 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
                 _arm_lift_from_image(lm[L_SHOULDER], lm[L_WRIST]),
             )
             joints["l_sho_roll"] = clamp("l_sho_roll", -MIME_SHOULDER_ROLL_GAIN * lift)
-            pitch = _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
+            pitch = _front_pitch_from_image(
+                lm[L_SHOULDER],
+                lm[L_WRIST],
+                MIME_LEFT_SHOULDER_DOWN_PITCH,
+            )
+            pitch += _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
             joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch)
             elbow_angle = _angle_at(lm[L_SHOULDER][:2], lm[L_ELBOW][:2], lm[L_WRIST][:2])
             joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - elbow_angle))
@@ -282,7 +323,7 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
     if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
         if _arm_is_down_in_image(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST], shoulder_width):
             joints["r_sho_roll"] = 0.0
-            joints["r_sho_pitch"] = 0.0
+            joints["r_sho_pitch"] = MIME_RIGHT_SHOULDER_DOWN_PITCH
             joints["r_el"] = 0.0
         else:
             lift = max(
@@ -290,7 +331,12 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
                 _arm_lift_from_image(lm[R_SHOULDER], lm[R_WRIST]),
             )
             joints["r_sho_roll"] = clamp("r_sho_roll", MIME_SHOULDER_ROLL_GAIN * lift)
-            pitch = _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
+            pitch = _front_pitch_from_image(
+                lm[R_SHOULDER],
+                lm[R_WRIST],
+                MIME_RIGHT_SHOULDER_DOWN_PITCH,
+            )
+            pitch += _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
             joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch)
             elbow_angle = _angle_at(lm[R_SHOULDER][:2], lm[R_ELBOW][:2], lm[R_WRIST][:2])
             joints["r_el"] = clamp("r_el", RIGHT_ELBOW_SIGN * (math.pi - elbow_angle))
@@ -372,7 +418,7 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
             joints["r_sho_roll"] = clamp("r_sho_roll", _camera_roll(ra, right, up))
 
         if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
-            joints["l_el"] = clamp("l_el", math.pi - _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST]))
+            joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])))
 
         if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
             joints["r_el"] = clamp("r_el", RIGHT_ELBOW_SIGN * (math.pi - _bend(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])))
@@ -399,8 +445,8 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
         joints["l_sho_roll"]  = clamp("l_sho_roll",  math.atan2( np.dot(la, right),  -np.dot(la, up)))
 
     if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
-        # π when straight → 0, bends toward +2.4 as arm folds
-        joints["l_el"] = clamp("l_el", math.pi - _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST]))
+        # π when straight -> 0, bends negative as the arm folds in this Gazebo model.
+        joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])))
 
     # ── Right arm ────────────────────────────────────────────────────────────
     if _ok(lm, R_SHOULDER, R_ELBOW):
