@@ -6,6 +6,10 @@ import math
 import time
 from typing import List
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import cv2
 import mediapipe as mp
 import numpy as np
