@@ -94,8 +94,8 @@ CONTROLLER_JOINTS = [
     "head_pan",    "head_tilt",
 ]
 _NEUTRAL = {name: 0.0 for name in CONTROLLER_JOINTS}
-ENABLE_LEG_TRACKING = False
-DEBUG_UPPER_BODY_ONLY = True
+ENABLE_LEG_TRACKING = True
+DEBUG_UPPER_BODY_ONLY = False
 
 
 # ── Math helpers ───────────────────────────────────────────────────────────────
@@ -133,8 +133,8 @@ def _stable_pitch(segment: np.ndarray, fwd: np.ndarray) -> float:
 
 
 def _canonical_up() -> np.ndarray:
-    """Fallback camera-aligned 'up' when lower-body landmarks are unreliable."""
-    return np.array([0.0, -1.0, 0.0], dtype=np.float64)
+    """Fallback 'up' direction — MediaPipe world y-axis points UP (+1.0)."""
+    return np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
 
 def _camera_roll(segment: np.ndarray, right: np.ndarray, up: np.ndarray) -> float:
@@ -255,8 +255,8 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
     # ── Left arm ─────────────────────────────────────────────────────────────
     if _ok(lm, L_SHOULDER, L_ELBOW):
         la = lm[L_ELBOW] - lm[L_SHOULDER]
-        # Stable forward/backward pitch: T-pose stays near 0 instead of jumping upward.
-        joints["l_sho_pitch"] = clamp("l_sho_pitch", _stable_pitch(la, fwd))
+        # pitch: arm down→0, arm forward→+π/2, arm straight up→π (clamped 2.0)
+        joints["l_sho_pitch"] = clamp("l_sho_pitch", math.atan2(np.dot(la, fwd), -np.dot(la, up)))
         # roll: arm to LEFT (la≈−right) → dot=−1 → negative = abduction (correct: init −0.3)
         joints["l_sho_roll"]  = clamp("l_sho_roll",  math.atan2( np.dot(la, right),  -np.dot(la, up)))
 
@@ -267,7 +267,7 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
     # ── Right arm ────────────────────────────────────────────────────────────
     if _ok(lm, R_SHOULDER, R_ELBOW):
         ra = lm[R_ELBOW] - lm[R_SHOULDER]
-        joints["r_sho_pitch"] = clamp("r_sho_pitch", _stable_pitch(ra, fwd))
+        joints["r_sho_pitch"] = clamp("r_sho_pitch", math.atan2(np.dot(ra, fwd), -np.dot(ra, up)))
         # roll: arm to RIGHT (ra≈+right) → dot=+1 → positive = abduction (correct: init +0.3)
         joints["r_sho_roll"]  = clamp("r_sho_roll",  math.atan2( np.dot(ra, right),  -np.dot(ra, up)))
 
