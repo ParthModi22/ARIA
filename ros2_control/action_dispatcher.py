@@ -31,13 +31,14 @@ CONTROLLER_JOINTS = [
 # are available; this keeps the robot relaxed if perception briefly drops.
 _Q6 = math.pi / 6   # 0.5236 rad
 _Q3 = math.pi / 3   # 1.0472 rad
-_ARM_DOWN_PITCH = -1.15
+_L_ARM_DOWN_ROLL = 1.35
+_R_ARM_DOWN_ROLL = -1.35
 
 STANDING_POSE: dict[str, float] = {
-    "l_sho_pitch":  _ARM_DOWN_PITCH,
-    "r_sho_pitch":  _ARM_DOWN_PITCH,
-    "l_sho_roll":   0.0,
-    "r_sho_roll":   0.0,
+    "l_sho_pitch":  0.0,
+    "r_sho_pitch":  0.0,
+    "l_sho_roll":   _L_ARM_DOWN_ROLL,
+    "r_sho_roll":   _R_ARM_DOWN_ROLL,
     "l_el":         0.0,
     "r_el":         0.0,
     "l_hip_yaw":    0.0,
