@@ -33,7 +33,7 @@ L_FOOT,     R_FOOT     = 31, 32
 # Raised/moving arms can have vis ~0.2, so keep upper-body threshold low.
 # Ankles/feet are unreliable when legs are partly out of frame — use strict threshold.
 VIS_UPPER  = 0.20   # torso, shoulder, elbow, wrist
-VIS_LOWER  = 0.40   # hip, knee
+VIS_LOWER  = 0.20   # hip, knee
 VIS_FOOT   = 0.60   # ankle, foot (often occluded; bad data causes ankle flailing)
 
 # ── Joint limits [rad] ─────────────────────────────────────────────────────────
@@ -131,6 +131,11 @@ def _stable_pitch(segment: np.ndarray, fwd: np.ndarray) -> float:
     return float(math.atan2(seg_fwd, max(seg_non_fwd, 1e-9)))
 
 
+def _canonical_up() -> np.ndarray:
+    """Fallback camera-aligned 'up' when lower-body landmarks are unreliable."""
+    return np.array([0.0, -1.0, 0.0], dtype=np.float64)
+
+
 # ── Visibility-filtered landmark array ────────────────────────────────────────
 
 def _make_lm(raw: np.ndarray) -> list[np.ndarray]:
@@ -179,15 +184,30 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
         return float(np.clip(v, lo, hi))
 
     # ── Body frame ────────────────────────────────────────────────────────────
-    if not _ok(lm, L_SHOULDER, R_SHOULDER, L_HIP, R_HIP):
+    if not _ok(lm, L_SHOULDER, R_SHOULDER):
         return joints
 
     sho_mid = (lm[L_SHOULDER] + lm[R_SHOULDER]) / 2.0
-    hip_mid = (lm[L_HIP]      + lm[R_HIP])      / 2.0
-
-    up    = _n(sho_mid - hip_mid)
     right = _n(lm[R_SHOULDER] - lm[L_SHOULDER])
-    fwd   = _n(np.cross(up, right))   # −z in MediaPipe world = toward camera
+
+    if _ok(lm, L_HIP, R_HIP):
+        hip_mid = (lm[L_HIP] + lm[R_HIP]) / 2.0
+        up = _n(sho_mid - hip_mid)
+    elif _ok(lm, NOSE):
+        up = _n(lm[NOSE] - sho_mid)
+    else:
+        up = _canonical_up()
+
+    if np.linalg.norm(up) <= 1e-9:
+        up = _canonical_up()
+
+    fwd = _n(np.cross(up, right))   # −z in MediaPipe world = toward camera
+    if np.linalg.norm(fwd) <= 1e-9:
+        up = _canonical_up()
+        fwd = _n(np.cross(up, right))
+
+    if np.linalg.norm(fwd) <= 1e-9:
+        return joints
 
     # ── Head ─────────────────────────────────────────────────────────────────
     if _ok(lm, NOSE):
