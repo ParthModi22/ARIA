@@ -8,6 +8,7 @@ USE_MOVEIT_IK="true"
 SHOW_CAMERA="true"
 INSTALL_SYSTEM="true"
 START_MOVE_GROUP="false"
+GAZEBO_GUI="true"
 MOVEIT_PACKAGE="op3_moveit_config"
 MOVEIT_LAUNCH_FILE="move_group.launch.py"
 
@@ -21,6 +22,7 @@ Options:
   --show-camera <true|false>      Show MediaPipe preview window (default: true)
   --install-system <true|false>   Install ROS/system deps via apt (default: true)
   --start-move-group <true|false> Start move_group separately (default: false)
+  --gazebo-gui <true|false>       Launch Gazebo client GUI in gazebo mode (default: true)
   --moveit-package <name>         MoveIt config package (default: op3_moveit_config)
   --moveit-launch-file <file>     MoveIt launch file (default: move_group.launch.py)
   -h, --help                      Show this help
@@ -52,6 +54,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --start-move-group)
       START_MOVE_GROUP="$2"
+      shift 2
+      ;;
+    --gazebo-gui)
+      GAZEBO_GUI="$2"
       shift 2
       ;;
     --moveit-package)
@@ -88,6 +94,21 @@ safe_source() {
   set -u
 }
 
+wait_for_service() {
+  local service_name="$1"
+  local timeout_sec="$2"
+  local elapsed=0
+
+  while (( elapsed < timeout_sec )); do
+    if ros2 service list 2>/dev/null | grep -Fxq "$service_name"; then
+      return 0
+    fi
+    sleep 1
+    ((elapsed += 1))
+  done
+  return 1
+}
+
 safe_source "/opt/ros/${ROS_DISTRO}/setup.bash"
 if [[ -f "/home/${USER}/ros2_ws/install/setup.bash" ]]; then
   safe_source "/home/${USER}/ros2_ws/install/setup.bash"
@@ -100,6 +121,7 @@ if [[ "${INSTALL_SYSTEM}" == "true" ]]; then
     sudo apt-get install -y \
       python3-venv \
       python3-pip \
+      python3-lxml \
       ros-${ROS_DISTRO}-xacro \
       ros-${ROS_DISTRO}-gazebo-ros \
       ros-${ROS_DISTRO}-gazebo-ros2-control \
@@ -135,6 +157,11 @@ if [[ "${MODE}" == "auto" ]]; then
   fi
 fi
 
+if [[ "${MODE}" == "gazebo" ]] && [[ "${GAZEBO_GUI}" == "true" ]] && [[ -z "${DISPLAY:-}" ]]; then
+  echo "[warn] DISPLAY is not set; forcing --gazebo-gui false (headless session)"
+  GAZEBO_GUI="false"
+fi
+
 if [[ "${START_MOVE_GROUP}" == "true" ]]; then
   if ros2 pkg prefix "${MOVEIT_PACKAGE}" >/dev/null 2>&1; then
     echo "[run] Starting move_group from ${MOVEIT_PACKAGE}/${MOVEIT_LAUNCH_FILE}"
@@ -146,9 +173,21 @@ if [[ "${START_MOVE_GROUP}" == "true" ]]; then
 fi
 
 if [[ "${MODE}" == "gazebo" ]]; then
+  if ! ros2 pkg prefix gazebo_ros >/dev/null 2>&1; then
+    echo "[error] gazebo_ros package not found. Install ROS Gazebo packages or run with --mode nogazebo"
+    exit 1
+  fi
+
   echo "[run] Starting Gazebo control pipeline"
-  ros2 launch "${REPO_ROOT}/ros2_control/op3_controller.launch.py" &
-  sleep 3
+  ros2 launch "${REPO_ROOT}/ros2_control/op3_controller.launch.py" "gazebo_gui:=${GAZEBO_GUI}" &
+
+  echo "[run] Waiting for controller manager service"
+  if ! wait_for_service "/controller_manager/list_controllers" 25; then
+    echo "[error] /controller_manager/list_controllers did not appear within timeout"
+    echo "[hint] Common cause: missing python3-lxml breaks spawn_entity.py"
+    echo "[hint] Try: sudo apt-get install -y python3-lxml ros-${ROS_DISTRO}-gazebo-ros2-control"
+    exit 1
+  fi
 
   echo "[run] Starting retargeting node (use_ik=${USE_MOVEIT_IK})"
   python3 "${REPO_ROOT}/retargeting/moveit_ik_retargeting_node.py" --ros-args -p "use_ik:=${USE_MOVEIT_IK}" &
@@ -163,7 +202,7 @@ else
 fi
 
 echo "[run] Starting MediaPipe perception (show_debug_window=${SHOW_CAMERA})"
-python "${REPO_ROOT}/perception/mediapipe_node.py" --ros-args -p "show_debug_window:=${SHOW_CAMERA}" &
+python3 "${REPO_ROOT}/perception/mediapipe_node.py" --ros-args -p "show_debug_window:=${SHOW_CAMERA}" &
 
 echo "[ok] ARIA pipeline started in '${MODE}' mode"
 echo "[ok] Key topics: /mediapipe/pose_world_landmarks /op3/joint_commands /forward_position_controller/commands"

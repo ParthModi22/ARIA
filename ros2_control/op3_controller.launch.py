@@ -4,7 +4,8 @@ from pathlib import Path
 import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -16,6 +17,8 @@ def _build_robot_description(xacro_path: Path, controller_config: Path) -> str:
 
 
 def generate_launch_description() -> LaunchDescription:
+    gazebo_gui = LaunchConfiguration("gazebo_gui")
+
     os.environ["GAZEBO_MODEL_DATABASE_URI"] = ""
     default_model_path = os.environ.get("GAZEBO_MODEL_PATH", "")
     try:
@@ -58,7 +61,7 @@ def generate_launch_description() -> LaunchDescription:
 
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(gazebo_launch)),
-        launch_arguments={"world": str(world_file), "gui": "false"}.items(),
+        launch_arguments={"world": str(world_file), "gui": gazebo_gui}.items(),
     )
 
     spawn_op3 = Node(
@@ -128,6 +131,7 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument("gazebo_gui", default_value="true"),
             gazebo,
             robot_state_publisher,
             spawn_op3,
