@@ -50,6 +50,27 @@ LIMITS: dict[str, tuple[float, float]] = {
     "r_ank_pitch": (-1.0,  1.0),
 }
 JOINT_NAMES = list(LIMITS.keys())
+
+# Default values when landmarks are not visible — keeps the robot in a
+# natural standing pose rather than collapsing to all-zero joints.
+STANDING_DEFAULTS: dict[str, float] = {
+    "head_pan":     0.0,
+    "head_tilt":    0.0,
+    "l_sho_pitch":  0.0,
+    "r_sho_pitch":  0.0,
+    "l_sho_roll":  -0.3,
+    "r_sho_roll":   0.3,
+    "l_el":         0.0,
+    "r_el":         0.0,
+    "l_hip_pitch": -0.57,
+    "r_hip_pitch":  0.57,
+    "l_hip_roll":   0.0,
+    "r_hip_roll":   0.0,
+    "l_knee":       1.2,
+    "r_knee":       1.2,
+    "l_ank_pitch":  0.62,
+    "r_ank_pitch": -0.62,
+}
 CONTROLLER_JOINTS = [
     "l_sho_pitch",
     "r_sho_pitch",
@@ -113,7 +134,7 @@ def compute_joints(lm: list[np.ndarray]) -> dict[str, float]:
     Shoulder roll   = arm in the frontal  plane  (right / up)
     Hip pitch/roll  = thigh decomposed the same way
     """
-    joints: dict[str, float] = {name: 0.0 for name in JOINT_NAMES}
+    joints: dict[str, float] = dict(STANDING_DEFAULTS)
 
     def clamp(name: str, val: float) -> float:
         lo, hi = LIMITS[name]
@@ -143,16 +164,16 @@ def compute_joints(lm: list[np.ndarray]) -> dict[str, float]:
         joints["l_sho_roll"]  = clamp("l_sho_roll",   math.atan2(-np.dot(la, right), -np.dot(la, up)))
 
     if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
-        joints["l_el"] = clamp("l_el", _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST]))
+        joints["l_el"] = clamp("l_el", math.pi - _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST]))
 
-    # ── Right arm (pitch sign flipped: OP3 r_sho_pitch is mirrored) ───────────
+    # ── Right arm (same sign convention as right hip — no invert) ─────────────
     if _ok(lm, R_SHOULDER, R_ELBOW):
         ra = lm[R_ELBOW] - lm[R_SHOULDER]
-        joints["r_sho_pitch"] = clamp("r_sho_pitch", math.atan2(-np.dot(ra, fwd),   -np.dot(ra, up)))
+        joints["r_sho_pitch"] = clamp("r_sho_pitch", math.atan2( np.dot(ra, fwd),   -np.dot(ra, up)))
         joints["r_sho_roll"]  = clamp("r_sho_roll",  math.atan2( np.dot(ra, right), -np.dot(ra, up)))
 
     if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
-        joints["r_el"] = clamp("r_el", _bend(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST]))
+        joints["r_el"] = clamp("r_el", math.pi - _bend(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST]))
 
     # ── Left leg ──────────────────────────────────────────────────────────────
     if _ok(lm, L_HIP, L_KNEE):
