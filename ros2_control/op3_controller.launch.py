@@ -67,7 +67,7 @@ def generate_launch_description() -> LaunchDescription:
             "-y",
             "0.0",
             "-z",
-            "0.35",
+            "0.31",
         ],
     )
 

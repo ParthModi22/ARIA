@@ -58,32 +58,32 @@
       </joint>
       <joint name="l_hip_pitch">
         <command_interface name="position"/>
-        <state_interface name="position"><param name="initial_value">-0.57</param></state_interface>
+        <state_interface name="position"><param name="initial_value">-0.5236</param></state_interface>
         <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
       </joint>
       <joint name="r_hip_pitch">
         <command_interface name="position"/>
-        <state_interface name="position"><param name="initial_value">0.57</param></state_interface>
+        <state_interface name="position"><param name="initial_value">0.5236</param></state_interface>
         <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
       </joint>
       <joint name="l_knee">
         <command_interface name="position"/>
-        <state_interface name="position"><param name="initial_value">1.2</param></state_interface>
+        <state_interface name="position"><param name="initial_value">1.0472</param></state_interface>
         <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
       </joint>
       <joint name="r_knee">
         <command_interface name="position"/>
-        <state_interface name="position"><param name="initial_value">1.2</param></state_interface>
+        <state_interface name="position"><param name="initial_value">1.0472</param></state_interface>
         <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
       </joint>
       <joint name="l_ank_pitch">
         <command_interface name="position"/>
-        <state_interface name="position"><param name="initial_value">0.62</param></state_interface>
+        <state_interface name="position"><param name="initial_value">0.5236</param></state_interface>
         <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
       </joint>
       <joint name="r_ank_pitch">
         <command_interface name="position"/>
-        <state_interface name="position"><param name="initial_value">-0.62</param></state_interface>
+        <state_interface name="position"><param name="initial_value">-0.5236</param></state_interface>
         <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
       </joint>
       <joint name="l_ank_roll">

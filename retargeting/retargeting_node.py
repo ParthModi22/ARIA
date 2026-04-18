@@ -53,23 +53,26 @@ JOINT_NAMES = list(LIMITS.keys())
 
 # Default values when landmarks are not visible — keeps the robot in a
 # natural standing pose rather than collapsing to all-zero joints.
+_Q6  = math.pi / 6   # 30°  — OP3 official hip/ankle pitch
+_Q3  = math.pi / 3   # 60°  — OP3 official knee
+
 STANDING_DEFAULTS: dict[str, float] = {
     "head_pan":     0.0,
     "head_tilt":    0.0,
     "l_sho_pitch":  0.0,
     "r_sho_pitch":  0.0,
-    "l_sho_roll":  -0.3,
+    "l_sho_roll":  -0.3,   # arms slightly away from body
     "r_sho_roll":   0.3,
     "l_el":         0.0,
     "r_el":         0.0,
-    "l_hip_pitch": -0.57,
-    "r_hip_pitch":  0.57,
+    "l_hip_pitch": -_Q6,   # -30° — thighs tilted slightly forward
+    "r_hip_pitch":  _Q6,   # +30°
     "l_hip_roll":   0.0,
     "r_hip_roll":   0.0,
-    "l_knee":       1.2,
-    "r_knee":       1.2,
-    "l_ank_pitch":  0.62,
-    "r_ank_pitch": -0.62,
+    "l_knee":       _Q3,   # 60° bend
+    "r_knee":       _Q3,
+    "l_ank_pitch":  _Q6,   # 30° — compensates for hip tilt
+    "r_ank_pitch": -_Q6,
 }
 CONTROLLER_JOINTS = [
     "l_sho_pitch",
@@ -149,7 +152,9 @@ def compute_joints(lm: list[np.ndarray]) -> dict[str, float]:
 
     up    = _n(shoulder_mid - hip_mid)
     right = _n(lm[R_SHOULDER] - lm[L_SHOULDER])
-    fwd   = _n(np.cross(right, up))
+    # MediaPipe world: x=person's right, y=up, z=BEHIND person.
+    # cross(up, right) = cross(+y, +x) = -z = toward camera = in front of person ✓
+    fwd   = _n(np.cross(up, right))
 
     # ── Head ──────────────────────────────────────────────────────────────────
     if _ok(lm, NOSE):
