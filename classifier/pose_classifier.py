@@ -162,6 +162,8 @@ class PoseClassifierNode(Node):
             return None
 
         xyz = np.asarray(flat_data, dtype=np.float32).reshape(LANDMARK_COUNT, 4)[:, :3]
+        if np.isnan(xyz).any():
+            return None
         return xyz
 
     def _predict(self, features: np.ndarray) -> tuple[str, float]:
@@ -205,7 +207,10 @@ def main(args: list[str] | None = None) -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
