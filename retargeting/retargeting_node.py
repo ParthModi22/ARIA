@@ -95,6 +95,7 @@ CONTROLLER_JOINTS = [
 ]
 _NEUTRAL = {name: 0.0 for name in CONTROLLER_JOINTS}
 ENABLE_LEG_TRACKING = False
+DEBUG_UPPER_BODY_ONLY = True
 
 
 # ── Math helpers ───────────────────────────────────────────────────────────────
@@ -134,6 +135,15 @@ def _stable_pitch(segment: np.ndarray, fwd: np.ndarray) -> float:
 def _canonical_up() -> np.ndarray:
     """Fallback camera-aligned 'up' when lower-body landmarks are unreliable."""
     return np.array([0.0, -1.0, 0.0], dtype=np.float64)
+
+
+def _camera_roll(segment: np.ndarray, right: np.ndarray, up: np.ndarray) -> float:
+    """Simple arm lift from shoulder using a camera-aligned frame."""
+    norm = np.linalg.norm(segment)
+    if norm <= 1e-9:
+        return 0.0
+    unit = segment / norm
+    return float(math.atan2(np.dot(unit, right), -np.dot(unit, up)))
 
 
 # ── Visibility-filtered landmark array ────────────────────────────────────────
@@ -189,6 +199,33 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
 
     sho_mid = (lm[L_SHOULDER] + lm[R_SHOULDER]) / 2.0
     right = _n(lm[R_SHOULDER] - lm[L_SHOULDER])
+
+    if DEBUG_UPPER_BODY_ONLY:
+        up = _canonical_up()
+        fwd = _n(np.cross(up, right))
+        if np.linalg.norm(fwd) <= 1e-9:
+            return joints
+
+        if _ok(lm, NOSE):
+            h = lm[NOSE] - sho_mid
+            joints["head_pan"] = clamp("head_pan", math.atan2(np.dot(h, right), -np.dot(h, fwd)))
+            joints["head_tilt"] = clamp("head_tilt", math.atan2(-np.dot(h, up), max(abs(np.dot(h, fwd)), 1e-9)) * 0.3)
+
+        if _ok(lm, L_SHOULDER, L_ELBOW):
+            la = lm[L_ELBOW] - lm[L_SHOULDER]
+            joints["l_sho_roll"] = clamp("l_sho_roll", _camera_roll(la, right, up))
+
+        if _ok(lm, R_SHOULDER, R_ELBOW):
+            ra = lm[R_ELBOW] - lm[R_SHOULDER]
+            joints["r_sho_roll"] = clamp("r_sho_roll", _camera_roll(ra, right, up))
+
+        if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
+            joints["l_el"] = clamp("l_el", math.pi - _bend(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST]))
+
+        if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
+            joints["r_el"] = clamp("r_el", math.pi - _bend(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST]))
+
+        return joints
 
     if _ok(lm, L_HIP, R_HIP):
         hip_mid = (lm[L_HIP] + lm[R_HIP]) / 2.0
