@@ -67,7 +67,7 @@ def generate_launch_description() -> LaunchDescription:
             "-y",
             "0.0",
             "-z",
-            "0.31",
+            "0.0",   # world_to_op3_base fixed joint already adds 0.31 m offset
         ],
     )
 
