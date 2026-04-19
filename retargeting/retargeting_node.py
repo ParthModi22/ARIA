@@ -128,7 +128,7 @@ ENABLE_2D_UPPER_BODY_MIME = True
 MIME_ARM_DOWN_DY = 0.06
 MIME_ARM_DOWN_RATIO = 0.55
 MIME_SHOULDER_PITCH_GAIN = 3.0
-MIME_SHOULDER_PITCH_DEADBAND = 0.04
+MIME_SHOULDER_PITCH_DEADBAND = 0.02
 MIME_SHOULDER_PITCH_LIMIT = 1.2
 LEFT_SHOULDER_PITCH_SIGN = 1.0
 RIGHT_SHOULDER_PITCH_SIGN = -1.0
@@ -270,6 +270,41 @@ def _arm_roll_from_image(
     return (1.0 - up_alpha) * shoulder_to_side + up_alpha * up_roll
 
 
+def _arm_roll_2d(shoulder: np.ndarray, elbow: np.ndarray, *, is_left: bool) -> float:
+    """
+    Shoulder roll from the 2D image angle of the upper arm — reference repo approach.
+
+    Measures the angle between (shoulder→elbow) and the image +y axis (downward).
+    This directly mirrors what the PyBullet reference does: angle at shoulder
+    between arm vector and torso/gravity vector.
+
+        arm hanging down  → angle≈0   → DOWN_ROLL  (~arm-down position on OP3)
+        arm horizontal    → angle≈π/2 → 0          (T-pose on OP3, roll=0)
+        arm straight up   → angle≈π   → UP_ROLL
+
+    Uses ONLY shoulder + elbow, so it works even when wrist is occluded.
+    """
+    dv = elbow[:2] - shoulder[:2]          # 2-D vector in image space
+    norm = float(np.linalg.norm(dv))
+    if norm < 1e-6:
+        return MIME_LEFT_ARM_DOWN_ROLL if is_left else MIME_RIGHT_ARM_DOWN_ROLL
+
+    # cos of angle between arm vector and +y (down in image)
+    cos_a = float(np.clip(dv[1] / norm, -1.0, 1.0))
+    arm_angle = math.acos(cos_a)           # 0 = arm down, π/2 = T-pose, π = arm up
+
+    down_roll = MIME_LEFT_ARM_DOWN_ROLL if is_left else MIME_RIGHT_ARM_DOWN_ROLL
+    up_roll   = MIME_LEFT_ARM_UP_ROLL   if is_left else MIME_RIGHT_ARM_UP_ROLL
+    half_pi   = math.pi / 2.0
+
+    if arm_angle <= half_pi:
+        t = arm_angle / half_pi            # 0→1 as arm goes from down to T-pose
+        return down_roll * (1.0 - t)       # lerp: down_roll → 0
+    else:
+        t = (arm_angle - half_pi) / half_pi  # 0→1 as arm goes from T-pose to up
+        return up_roll * t                 # lerp: 0 → up_roll
+
+
 def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
     """
     Stage 1 hackathon mimicry: image-space head + arms only.
@@ -301,43 +336,70 @@ def compute_upper_body_mime_joints(raw: np.ndarray) -> dict[str, float]:
         # Keep tilt conservative; large head tilt targets can distract from arm debugging.
         joints["head_tilt"] = clamp("head_tilt", -0.25 * float(nose_delta[1]) / shoulder_width)
 
-    if _ok(lm, L_SHOULDER, L_ELBOW, L_WRIST):
-        pitch = _arm_pitch_from_image_depth(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST])
-        if _arm_is_down_in_image(lm[L_SHOULDER], lm[L_ELBOW], lm[L_WRIST], shoulder_width):
-            joints["l_sho_roll"] = MIME_LEFT_ARM_DOWN_ROLL
-            # Keep down-roll pose, but still allow front/back shoulder motion.
-            joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch)
-            joints["l_el"] = 0.0
-        else:
-            roll = _arm_roll_from_image(
-                lm[L_SHOULDER],
-                lm[L_WRIST],
-                shoulder_width,
-                is_left=True,
+    # ── Left arm ─────────────────────────────────────────────────────────────
+    # Roll: needs only shoulder + elbow (reference approach: upper-arm angle)
+    if _ok(lm, L_SHOULDER, L_ELBOW):
+        joints["l_sho_roll"] = clamp(
+            "l_sho_roll", _arm_roll_2d(l_shoulder, lm[L_ELBOW], is_left=True)
+        )
+        # Pitch + elbow: need wrist for depth signal and bend angle
+        if _ok(lm, L_WRIST):
+            pitch = _arm_pitch_from_image_depth(l_shoulder, lm[L_ELBOW], lm[L_WRIST])
+            joints["l_sho_pitch"] = clamp(
+                "l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch
             )
-            joints["l_sho_roll"] = clamp("l_sho_roll", roll)
-            joints["l_sho_pitch"] = clamp("l_sho_pitch", LEFT_SHOULDER_PITCH_SIGN * pitch)
-            elbow_angle = _angle_at(lm[L_SHOULDER][:2], lm[L_ELBOW][:2], lm[L_WRIST][:2])
-            joints["l_el"] = clamp("l_el", LEFT_ELBOW_SIGN * (math.pi - elbow_angle))
+            elbow_angle = _angle_at(
+                l_shoulder[:2], lm[L_ELBOW][:2], lm[L_WRIST][:2]
+            )
+            joints["l_el"] = clamp(
+                "l_el", LEFT_ELBOW_SIGN * (math.pi - elbow_angle)
+            )
 
-    if _ok(lm, R_SHOULDER, R_ELBOW, R_WRIST):
-        pitch = _arm_pitch_from_image_depth(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST])
-        if _arm_is_down_in_image(lm[R_SHOULDER], lm[R_ELBOW], lm[R_WRIST], shoulder_width):
-            joints["r_sho_roll"] = MIME_RIGHT_ARM_DOWN_ROLL
-            # Keep down-roll pose, but still allow front/back shoulder motion.
-            joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch)
-            joints["r_el"] = 0.0
-        else:
-            roll = _arm_roll_from_image(
-                lm[R_SHOULDER],
-                lm[R_WRIST],
-                shoulder_width,
-                is_left=False,
+    # ── Right arm ────────────────────────────────────────────────────────────
+    if _ok(lm, R_SHOULDER, R_ELBOW):
+        joints["r_sho_roll"] = clamp(
+            "r_sho_roll", _arm_roll_2d(r_shoulder, lm[R_ELBOW], is_left=False)
+        )
+        if _ok(lm, R_WRIST):
+            pitch = _arm_pitch_from_image_depth(r_shoulder, lm[R_ELBOW], lm[R_WRIST])
+            joints["r_sho_pitch"] = clamp(
+                "r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch
             )
-            joints["r_sho_roll"] = clamp("r_sho_roll", roll)
-            joints["r_sho_pitch"] = clamp("r_sho_pitch", RIGHT_SHOULDER_PITCH_SIGN * pitch)
-            elbow_angle = _angle_at(lm[R_SHOULDER][:2], lm[R_ELBOW][:2], lm[R_WRIST][:2])
-            joints["r_el"] = clamp("r_el", RIGHT_ELBOW_SIGN * (math.pi - elbow_angle))
+            elbow_angle = _angle_at(
+                r_shoulder[:2], lm[R_ELBOW][:2], lm[R_WRIST][:2]
+            )
+            joints["r_el"] = clamp(
+                "r_el", RIGHT_ELBOW_SIGN * (math.pi - elbow_angle)
+            )
+
+    # ── Legs (2-D frontal estimate) ──────────────────────────────────────────
+    # Hip pitch (forward/backward) is NOT observable from a frontal camera —
+    # we leave those at the standing defaults.  What IS visible:
+    #   • hip roll   — lateral spread of the thigh
+    #   • knee bend  — interior angle (hip, knee, ankle) in image plane
+    if ENABLE_LEG_TRACKING and _ok(lm, L_HIP, R_HIP, L_KNEE, R_KNEE):
+        # ── Left leg ──────────────────────────────────────────────────────
+        lt2 = (lm[L_KNEE] - lm[L_HIP])[:2]       # 2-D thigh vector (image +x right, +y down)
+        if float(np.linalg.norm(lt2)) > 1e-6:
+            # atan2(lateral, downward) — mirrors the 3D formula projected onto image plane
+            joints["l_hip_roll"] = clamp(
+                "l_hip_roll", math.atan2(float(lt2[0]), float(lt2[1]))
+            )
+
+        # ── Right leg ─────────────────────────────────────────────────────
+        rt2 = (lm[R_KNEE] - lm[R_HIP])[:2]
+        if float(np.linalg.norm(rt2)) > 1e-6:
+            joints["r_hip_roll"] = clamp(
+                "r_hip_roll", math.atan2(float(rt2[0]), float(rt2[1]))
+            )
+
+        # ── Knee bends (need ankle in frame) ──────────────────────────────
+        if _ok(lm, L_ANKLE):
+            knee_ang = _angle_at(lm[L_HIP][:2], lm[L_KNEE][:2], lm[L_ANKLE][:2])
+            joints["l_knee"] = clamp("l_knee", math.pi - knee_ang)
+        if _ok(lm, R_ANKLE):
+            knee_ang = _angle_at(lm[R_HIP][:2], lm[R_KNEE][:2], lm[R_ANKLE][:2])
+            joints["r_knee"] = clamp("r_knee", math.pi - knee_ang)
 
     return joints
 
@@ -467,7 +529,9 @@ def compute_joints(raw: np.ndarray) -> dict[str, float]:
         lt = lm[L_KNEE] - lm[L_HIP]
         # Negate fwd component so forward-leaning thigh → negative pitch (init = −π/6)
         joints["l_hip_pitch"] = clamp("l_hip_pitch", math.atan2(-np.dot(lt, fwd),   -np.dot(lt, up)))
-        joints["l_hip_roll"]  = clamp("l_hip_roll",  math.atan2(-np.dot(lt, right),  -np.dot(lt, up)))
+        # URDF l_hip_roll axis (-1,0,0): positive=adduction(inward). Leg going LEFT=abduction=negative.
+        # Remove the negation on right so leg-left gives negative (abduction). ✓
+        joints["l_hip_roll"]  = clamp("l_hip_roll",  math.atan2( np.dot(lt, right),  -np.dot(lt, up)))
 
         # Right thigh vector
         rt = lm[R_KNEE] - lm[R_HIP]
