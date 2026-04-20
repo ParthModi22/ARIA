@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="robotis_op3">
+  <link name="world"/>
+  <joint name="world_to_op3_base" type="fixed">
+    <parent link="world"/>
+    <child link="base"/>
+    <origin xyz="0 0 0.35" rpy="0 0 0"/>
+  </joint>
+
+  <xacro:arg name="controller_config_file" default="forward_command_config.yaml"/>
+
+  <xacro:include filename="$(find op3_description)/urdf/robotis_op3.urdf.xacro"/>
+  <xacro:include filename="op3_ros2_control.xacro"/>
+
+  <xacro:op3_ros2_control
+    controller_config_file="$(arg controller_config_file)"/>
+</robot>

@@ -1,0 +1,117 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:macro name="op3_ros2_control" params="controller_config_file">
+    <ros2_control name="op3_gazebo_system" type="system">
+      <hardware>
+        <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+      </hardware>
+
+      <joint name="l_sho_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_sho_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="l_sho_roll">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_sho_roll">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="l_el">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_el">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="l_hip_yaw">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_hip_yaw">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="l_hip_roll">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_hip_roll">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="l_hip_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_hip_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="l_knee">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_knee">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="l_ank_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_ank_pitch">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="l_ank_roll">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="r_ank_roll">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="head_pan">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+      <joint name="head_tilt">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"><param name="initial_value">0.0</param></state_interface>
+      </joint>
+    </ros2_control>
+
+    <gazebo>
+      <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
+        <parameters>${controller_config_file}</parameters>
+      </plugin>
+    </gazebo>
+  </xacro:macro>
+</robot>
